@@ -1,0 +1,28 @@
+# Dados brutos e derivados (nunca versionar)
+*.parquet
+data/raw/*
+!data/raw/.gitkeep
+data/interim/*
+!data/interim/.gitkeep
+
+# PDFs e material de referência local
+*.pdf
+
+# Python / uv
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Ambiente e segredos
+.env
+.env.*
+!.env.example
+
+# SO / editores
+.DS_Store
+.idea/
+.vscode/
