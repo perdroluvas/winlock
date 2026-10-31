@@ -4,6 +4,30 @@ One entry per decision. Format: context → decision → consequence. Newest fir
 
 ---
 
+## 2026-10-31: Deadlock-style chart theme with hero portraits
+
+**Context.** The charts used a plain light reference style. For the post we wanted them to look
+like the game.
+
+**Decision.**
+- Colors and fonts live in `theme.py`, not in `figures.py`; `[figures] theme` in
+  `config/analysis.toml` picks `"deadlock"` (default) or `"clean"` (the old look).
+- Deadlock theme: dark smoke background, the game's own UI colors from the deadlock-api
+  `/v1/assets/colors` list (Amber `team1_color` #d4860b, Sapphire `team2_color` #4d75c3, cream
+  `base_text`, brass `golden_*`) and an art-deco double frame.
+- On the win-rate chart, Amber = above 50% and Sapphire = below 50% (Holm). This is a color
+  convention only: it has nothing to do with which team the hero was on.
+- Fonts: free OFL look-alikes bundled in `src/winlock/assets/fonts/` (Cinzel Decorative,
+  Josefin Sans, with their licenses). The game's own fonts (Radiance, Reaver) are commercial and
+  are not redistributed.
+- Hero portraits: `winlock portraits` downloads them once from `api.deadlock-api.com` into
+  `data/reference/portraits/` (Valve art, git-ignored). Charts work without them.
+
+**Consequence.** The charts no longer depend on the theme in their logic, and both looks are
+tested. The portraits need one network step on a new machine.
+
+---
+
 ## 2026-10-31: Holm on the headline, split-half control, code structure
 
 **Context.** The baseline chart colored heroes by "own 95% CI excludes 50%": 43 uncorrected

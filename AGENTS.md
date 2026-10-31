@@ -27,7 +27,9 @@ then ML). Delivering the result comes second. Respond in English.
 | `src/winlock/model.py` | match-outcome models (heroes → winner), scored on the test split |
 | `src/winlock/synergy.py` | teammate-pair synergy: per-pair tests, replication, pair model |
 | `src/winlock/figures.py` | charts for the post |
-| `src/winlock/cli.py`, `__main__.py` | entry point: `winlock quality / figures / evaluate / model / synergy`; loads, calls, prints, saves (no analysis logic) |
+| `src/winlock/theme.py` | chart themes (`deadlock` / `clean`): palette, fonts, art-deco frame |
+| `src/winlock/portraits.py` | hero portraits: `winlock portraits` caches them in `data/reference/portraits/` |
+| `src/winlock/cli.py`, `__main__.py` | entry point: `winlock quality / figures / evaluate / model / synergy / portraits`; loads, calls, prints, saves (no analysis logic) |
 | `notebooks/` | charts only; the user writes the text. No logic of its own |
 | `tests/` | one test file per module, plus chart smoke tests (fake matches in `conftest.py`) |
 | `reports/figures`, `reports/tables` | final outputs |

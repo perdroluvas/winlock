@@ -6,6 +6,7 @@ Usage:
     uv run winlock evaluate     # do the train win rates hold on test? + split-half control
     uv run winlock model        # can the heroes in a match predict the winner on test?
     uv run winlock synergy      # do some teammate pairs win more than their parts predict?
+    uv run winlock portraits    # download hero portraits once for the win-rate chart (network)
 """
 
 import argparse
@@ -15,7 +16,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from winlock import evaluation, figures, model, quality, synergy
+from winlock import evaluation, figures, model, portraits, quality, synergy, theme
 from winlock.config import load_config, resolve_path
 from winlock.db import connect, load_heroes
 from winlock.population import (
@@ -43,6 +44,8 @@ class Run:
         self.tables = resolve_path(self.cfg["figures"]["tables_dir"])
         self.tables.mkdir(parents=True, exist_ok=True)
         self.dpi = self.cfg["figures"]["dpi"]
+        theme.use(self.cfg["figures"]["theme"])
+        self.portraits = resolve_path(self.cfg["portraits"]["dir"])
         self.day = self.cfg["population"]["start_day"]
         self.written: list[Path] = []
 
@@ -119,6 +122,7 @@ def cmd_figures() -> None:
         run.figures / "train_winrate_ci.png",
         f"Hero win rates, {title}",
         alpha=run.alpha,
+        portraits_dir=run.portraits,
     )
     run.chart(
         figures.games_per_hero_chart,
@@ -316,12 +320,23 @@ def cmd_synergy() -> None:
     run.report_written()
 
 
+def cmd_portraits() -> None:
+    cfg = load_config()
+    p = cfg["portraits"]
+    dest = resolve_path(p["dir"])
+    hero_ids = load_heroes()["hero_id"].tolist()
+    written = portraits.fetch_portraits(p["api_url"], p["image_key"], dest, hero_ids, p["size_px"])
+    cached = sum((dest / f"{h}.png").exists() for h in hero_ids)
+    print(f"Downloaded {len(written)} portraits; {cached} of {len(hero_ids)} heroes cached")
+
+
 COMMANDS = {
     "quality": (cmd_quality, "data checks: start days, start hours, complete matches"),
     "figures": (cmd_figures, "population report + train baseline charts"),
     "evaluate": (cmd_evaluate, "train vs test win rates + split-half control"),
     "model": (cmd_model, "predict match winners from heroes, scored on test"),
     "synergy": (cmd_synergy, "teammate pair synergy: per-pair tests + model with pair terms"),
+    "portraits": (cmd_portraits, "download hero portraits once (network) for the win-rate chart"),
 }
 
 

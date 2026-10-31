@@ -1,6 +1,7 @@
 """Charts for the post. Each function takes an aggregate table and writes one PNG.
 
 Tables must carry a `name` column (see population.add_hero_names) for the hero labels.
+Colors and fonts come from the active theme (theme.py), never from constants here.
 """
 
 from pathlib import Path
@@ -12,78 +13,119 @@ matplotlib.use("Agg")  # write files only, no window
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
+from matplotlib.offsetbox import AnnotationBbox, OffsetImage  # noqa: E402
+from matplotlib.transforms import offset_copy  # noqa: E402
 from scipy.stats import norm  # noqa: E402
 
-# Reference palette (light mode): one accent for the signal, gray for "can't tell from 50%".
-SURFACE = "#fcfcfb"
-TEXT_PRIMARY = "#0b0b0b"
-TEXT_SECONDARY = "#52514e"
-GRID = "#e4e3de"
-ACCENT = "#2a78d6"
-ACCENT_2 = "#eb6834"  # second categorical slot (orange)
-NEUTRAL = "#a3a29c"
-
-STYLE = {
-    "figure.facecolor": SURFACE,
-    "axes.facecolor": SURFACE,
-    "axes.edgecolor": GRID,
-    "axes.labelcolor": TEXT_SECONDARY,
-    "axes.titlecolor": TEXT_PRIMARY,
-    "axes.titlesize": 13,
-    "axes.titlelocation": "left",
-    "axes.spines.top": False,
-    "axes.spines.right": False,
-    "axes.grid": True,
-    "axes.axisbelow": True,
-    "grid.color": GRID,
-    "grid.linewidth": 0.8,
-    "xtick.color": TEXT_SECONDARY,
-    "ytick.color": TEXT_SECONDARY,
-    "font.size": 9,
-    "legend.frameon": False,
-}
+from winlock import theme  # noqa: E402
+from winlock.portraits import load_portraits  # noqa: E402
 
 
 def _save(fig: plt.Figure, path: Path, dpi: int) -> Path:
+    theme.finish(fig)
     path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(path, dpi=dpi, bbox_inches="tight")
+    # A framed theme lays itself out (constrained layout); cropping would cut the frame.
+    fig.savefig(path, dpi=dpi, bbox_inches=None if theme.active().trim else "tight")
     plt.close(fig)
     return path
 
 
+def _portrait_axis(ax, hero_ids, y, portraits_dir: Path | None, t: theme.Theme) -> None:
+    """Small round portraits just left of the axis, one per row; tick labels move further left.
+
+    Heroes without a cached portrait just keep their name.
+    """
+    images = load_portraits(portraits_dir, hero_ids)
+    if not images:
+        return
+    size_pt = t.row_height * 72 * 0.8  # 80% of the row height, in points
+    for hero_id, yi in zip(hero_ids, y, strict=True):
+        img = images.get(int(hero_id))
+        if img is None:
+            continue
+        box = AnnotationBbox(
+            OffsetImage(img, zoom=size_pt / img.shape[0]),
+            (0, yi),
+            xycoords=("axes fraction", "data"),
+            xybox=(-size_pt / 2 - 3, 0),
+            boxcoords="offset points",
+            frameon=True,
+            bboxprops={
+                "boxstyle": "circle,pad=0.0",
+                "edgecolor": t.trim or t.grid,
+                "facecolor": t.surface,
+                "linewidth": 0.8,
+            },
+            annotation_clip=False,
+        )
+        ax.add_artist(box)
+    ax.tick_params(axis="y", length=0, pad=size_pt + 8)
+
+
 def winrate_ci_chart(
-    df: pd.DataFrame, path: Path, title: str, alpha: float = 0.05, dpi: int = 150
+    df: pd.DataFrame,
+    path: Path,
+    title: str,
+    alpha: float = 0.05,
+    dpi: int = 150,
+    portraits_dir: Path | None = None,
 ) -> Path:
     """Heroes sorted by win rate, Wilson CI as a line, the 50% line highlighted.
 
-    Accent = different from 50% after Holm correction over all heroes (`p_vs_half_holm`, see
-    stats.binomial_vs_half); gray = can't tell from 50%. Without that column, falls back to
-    "CI excludes 50%" (uncorrected).
+    Colored = different from 50% after Holm correction over all heroes (`p_vs_half_holm`, see
+    stats.binomial_vs_half), `high` color above 50% and `low` below (the same color in the
+    clean theme); gray = can't tell from 50%. Without that column, falls back to "CI excludes
+    50%" (uncorrected). With `portraits_dir`, cached hero portraits sit next to the names.
     """
     d = df.sort_values("win_rate").reset_index(drop=True)
     if "p_vs_half_holm" in d:
         differs = d["p_vs_half_holm"] < alpha
-        labels = ("differs from 50% (Holm)", "not distinguishable from 50% (Holm)")
+        tag, none_label = "(Holm)", "not distinguishable from 50% (Holm)"
     else:
         differs = (d["ci_low"] > 0.5) | (d["ci_high"] < 0.5)
-        labels = ("95% CI excludes 50%", "95% CI includes 50%")
+        tag, none_label = "(95% CI)", "95% CI includes 50%"
+    above = d["win_rate"] > 0.5
     y = np.arange(len(d))
-    with plt.rc_context(STYLE):
-        fig, ax = plt.subplots(figsize=(7, 0.22 * len(d) + 1.5))
+    with theme.style() as t:
+        if t.high == t.low:  # one color for "differs": one legend entry
+            groups = [(differs, t.high, f"differs from 50% {tag}")]
+        else:
+            groups = [
+                (differs & above, t.high, f"above 50% {tag}"),
+                (differs & ~above, t.low, f"below 50% {tag}"),
+            ]
+        groups.append((~differs, t.neutral, none_label))
+        fig, ax = plt.subplots(figsize=(7, t.row_height * len(d) + 1.5))
         ax.grid(axis="y", visible=False)
-        ax.axvline(0.5, color=TEXT_PRIMARY, linewidth=1.2, zorder=1)
-        for mask, color, label in [(differs, ACCENT, labels[0]), (~differs, NEUTRAL, labels[1])]:
+        ax.axvline(0.5, color=t.text, linewidth=1.2, zorder=1)
+        for mask, color, label in groups:
             if not mask.any():
                 continue
             ax.hlines(y[mask], d["ci_low"][mask], d["ci_high"][mask], color=color, linewidth=2)
-            ax.scatter(d["win_rate"][mask], y[mask], color=color, s=24, zorder=3, label=label)
+            ax.scatter(
+                d["win_rate"][mask],
+                y[mask],
+                color=color,
+                s=26,
+                zorder=3,
+                edgecolor=t.surface,
+                linewidth=1,
+                label=label,
+            )
         ax.set_yticks(y, d["name"])
+        _portrait_axis(ax, d["hero_id"], y, portraits_dir, t)
         ax.set_ylim(-0.8, len(d) - 0.2)
         ax.xaxis.set_major_locator(matplotlib.ticker.MultipleLocator(0.02))
         ax.xaxis.set_major_formatter(matplotlib.ticker.PercentFormatter(1.0, decimals=0))
         ax.set_xlabel("Win rate (dot) with 95% Wilson CI (line)")
         ax.set_title(title)
-        ax.legend(loc="lower right")
+        # Below the axis: inside, it sat on the 50% line next to the lowest heroes. The anchor
+        # is 34 points under the axis (clear of ticks + x label), whatever the chart's height;
+        # an axes fraction like -0.07 would grow with the number of heroes.
+        below = offset_copy(ax.transAxes, fig=fig, y=-34, units="points")
+        ax.legend(
+            loc="upper center", bbox_to_anchor=(0.5, 0), bbox_transform=below, ncol=3, fontsize=8
+        )
         return _save(fig, path, dpi)
 
 
@@ -91,10 +133,10 @@ def games_per_hero_chart(df: pd.DataFrame, path: Path, title: str, dpi: int = 15
     """Sample size per hero: fewer games means a wider CI."""
     d = df.sort_values("games").reset_index(drop=True)
     y = np.arange(len(d))
-    with plt.rc_context(STYLE):
-        fig, ax = plt.subplots(figsize=(7, 0.22 * len(d) + 1.5))
+    with theme.style() as t:
+        fig, ax = plt.subplots(figsize=(7, t.row_height * len(d) + 1.5))
         ax.grid(axis="y", visible=False)
-        ax.barh(y, d["games"], height=0.7, color=ACCENT)
+        ax.barh(y, d["games"], height=0.7, color=t.accent)
         ax.set_yticks(y, d["name"])
         ax.set_ylim(-0.8, len(d) - 0.2)
         ax.xaxis.set_major_formatter(matplotlib.ticker.StrMethodFormatter("{x:,.0f}"))
@@ -109,22 +151,22 @@ def ci_width_vs_games_chart(
     """CI width against games, with the p = 0.5 curve 2·z·sqrt(0.25/n) for reference."""
     z = norm.ppf(1 - alpha / 2)
     n = np.linspace(df["games"].min() * 0.9, df["games"].max() * 1.05, 200)
-    with plt.rc_context(STYLE):
+    with theme.style() as t:
         fig, ax = plt.subplots(figsize=(7, 4.5))
         ax.plot(
             n,
             100 * 2 * z * np.sqrt(0.25 / n),
-            color=TEXT_SECONDARY,
+            color=t.text_secondary,
             linewidth=2,
             label="2·z·√(0.25/n)",
         )
         ax.scatter(
             df["games"],
             100 * (df["ci_high"] - df["ci_low"]),
-            color=ACCENT,
+            color=t.accent,
             s=28,
             zorder=3,
-            edgecolor=SURFACE,
+            edgecolor=t.surface,
             linewidth=1.5,
             label="heroes",
         )
@@ -138,6 +180,7 @@ def ci_width_vs_games_chart(
 
 def _label_points(ax, x, y, names) -> None:
     """Direct labels for a few selected points, in secondary ink."""
+    t = theme.active()
     for xi, yi, name in zip(x, y, names, strict=True):
         ax.annotate(
             name,
@@ -145,7 +188,7 @@ def _label_points(ax, x, y, names) -> None:
             xytext=(5, 3),
             textcoords="offset points",
             fontsize=8,
-            color=TEXT_SECONDARY,
+            color=t.text_secondary,
         )
 
 
@@ -165,14 +208,14 @@ def train_vs_test_chart(
     lo = min(ev["rate_train"].min(), ev["rate_test"].min()) - 0.01
     hi = max(ev["rate_train"].max(), ev["rate_test"].max()) + 0.01
     moved = ev["p_holm"] < 0.05
-    with plt.rc_context(STYLE):
+    with theme.style() as t:
         fig, ax = plt.subplots(figsize=(6.5, 6.5))
-        ax.plot([lo, hi], [lo, hi], color=TEXT_SECONDARY, linewidth=1.2, label="test = train")
-        ax.axhline(0.5, color=GRID, linewidth=1.5, zorder=0)
-        ax.axvline(0.5, color=GRID, linewidth=1.5, zorder=0)
+        ax.plot([lo, hi], [lo, hi], color=t.text_secondary, linewidth=1.2, label="test = train")
+        ax.axhline(0.5, color=t.grid, linewidth=1.5, zorder=0)
+        ax.axvline(0.5, color=t.grid, linewidth=1.5, zorder=0)
         for mask, color, label in [
-            (~moved, NEUTRAL, "change not significant (Holm)"),
-            (moved, ACCENT, "change significant (Holm)"),
+            (~moved, t.neutral, "change not significant (Holm)"),
+            (moved, t.accent, "change significant (Holm)"),
         ]:
             if not mask.any():  # no empty legend entries
                 continue
@@ -182,7 +225,7 @@ def train_vs_test_chart(
                 color=color,
                 s=36,
                 zorder=3,
-                edgecolor=SURFACE,
+                edgecolor=t.surface,
                 linewidth=1.5,
                 label=label,
             )
@@ -206,9 +249,9 @@ def z_distribution_chart(zs: dict[str, pd.Series], path: Path, title: str, dpi: 
     """
     grid = np.linspace(-4.5, 4.5, 300)
     bound = max(4.5, max(float(np.ceil(np.abs(z).max())) for z in zs.values()))
-    with plt.rc_context(STYLE):
+    with theme.style() as t:
         fig, ax = plt.subplots(figsize=(7, 4.5))
-        for (name, z), color in zip(zs.items(), [ACCENT, ACCENT_2][: len(zs)], strict=True):
+        for (name, z), color in zip(zs.items(), [t.accent, t.accent_2][: len(zs)], strict=True):
             ax.hist(
                 z,
                 bins=np.arange(-bound, bound + 0.5, 0.5),
@@ -221,7 +264,7 @@ def z_distribution_chart(zs: dict[str, pd.Series], path: Path, title: str, dpi: 
         ax.plot(
             grid,
             norm.pdf(grid),
-            color=TEXT_PRIMARY,
+            color=t.text,
             linewidth=1.5,
             linestyle="--",
             label="N(0, 1): pure chance",
@@ -237,19 +280,19 @@ def coverage_simulation_chart(
     simulated: np.ndarray, observed: float, path: Path, title: str, dpi: int = 150
 ) -> Path:
     """Distribution of coverage in simulated "nothing changed" worlds, with the observed value."""
-    with plt.rc_context(STYLE):
+    with theme.style() as t:
         fig, ax = plt.subplots(figsize=(7, 4.5))
         bins = np.arange(simulated.min() - 0.0125, simulated.max() + 0.025, 1 / 40)
         ax.hist(
             simulated,
             bins=bins,
-            color=NEUTRAL,
-            edgecolor=SURFACE,
+            color=t.neutral,
+            edgecolor=t.surface,
             linewidth=1,
             label="simulated: nothing changed",
         )
-        ax.axvline(observed, color=ACCENT, linewidth=2.5, label=f"observed: {observed:.0%}")
-        ax.axvline(0.95, color=TEXT_PRIMARY, linewidth=1.2, linestyle="--", label="nominal 95%")
+        ax.axvline(observed, color=t.accent, linewidth=2.5, label=f"observed: {observed:.0%}")
+        ax.axvline(0.95, color=t.text, linewidth=1.2, linestyle="--", label="nominal 95%")
         ax.xaxis.set_major_formatter(matplotlib.ticker.PercentFormatter(1.0, decimals=0))
         ax.set_xlabel("Share of heroes whose test rate falls inside their train CI")
         ax.set_ylabel("Simulations")
@@ -261,12 +304,12 @@ def coverage_simulation_chart(
 def model_accuracy_chart(metrics: pd.DataFrame, path: Path, title: str, dpi: int = 150) -> Path:
     """Test accuracy per model as a dot with its 95% Wilson CI, against the 50% line."""
     y = np.arange(len(metrics))
-    with plt.rc_context(STYLE):
+    with theme.style() as t:
         fig, ax = plt.subplots(figsize=(7, 0.6 * len(metrics) + 1.5))
         ax.grid(axis="y", visible=False)
-        ax.axvline(0.5, color=TEXT_PRIMARY, linewidth=1.2, zorder=1)
-        ax.hlines(y, metrics["acc_ci_low"], metrics["acc_ci_high"], color=ACCENT, linewidth=2)
-        ax.scatter(metrics["accuracy"], y, color=ACCENT, s=36, zorder=3)
+        ax.axvline(0.5, color=t.text, linewidth=1.2, zorder=1)
+        ax.hlines(y, metrics["acc_ci_low"], metrics["acc_ci_high"], color=t.accent, linewidth=2)
+        ax.scatter(metrics["accuracy"], y, color=t.accent, s=36, zorder=3)
         for yi, acc in zip(y, metrics["accuracy"], strict=True):
             ax.annotate(
                 f"{acc:.1%}",
@@ -275,7 +318,7 @@ def model_accuracy_chart(metrics: pd.DataFrame, path: Path, title: str, dpi: int
                 textcoords="offset points",
                 ha="center",
                 fontsize=8,
-                color=TEXT_SECONDARY,
+                color=t.text_secondary,
             )
         ax.set_yticks(y, metrics["model"])
         ax.set_ylim(-0.7, len(metrics) - 0.3)
@@ -293,11 +336,11 @@ def calibration_chart(
     dpi: int = 150,
 ) -> Path:
     """Predicted P(Team0 wins) vs how often Team0 actually won, in deciles of the prediction."""
-    with plt.rc_context(STYLE):
+    with theme.style() as t:
         fig, ax = plt.subplots(figsize=(6.5, 6.5))
-        ax.plot([0, 1], [0, 1], color=TEXT_SECONDARY, linewidth=1.2, label="perfect calibration")
+        ax.plot([0, 1], [0, 1], color=t.text_secondary, linewidth=1.2, label="perfect calibration")
         for (name, (y, p)), color in zip(
-            preds.items(), [ACCENT, ACCENT_2][: len(preds)], strict=True
+            preds.items(), [t.accent, t.accent_2][: len(preds)], strict=True
         ):
             d = pd.DataFrame({"y": y, "p": p})
             d["bin"] = pd.qcut(d["p"], n_bins, labels=False, duplicates="drop")
@@ -309,7 +352,7 @@ def calibration_chart(
                 linewidth=2,
                 marker="o",
                 markersize=6,
-                markeredgecolor=SURFACE,
+                markeredgecolor=t.surface,
                 label=name,
             )
         ax.set_xlim(0.2, 0.8)
@@ -332,17 +375,17 @@ def coefficients_chart(
     Labels: the highest and lowest coefficient, plus the heroes furthest from the linear trend
     (where the model disagrees most with the plain win rate).
     """
-    with plt.rc_context(STYLE):
+    with theme.style() as t:
         fig, ax = plt.subplots(figsize=(7, 5))
-        ax.axhline(0, color=GRID, linewidth=1.5, zorder=0)
-        ax.axvline(0.5, color=GRID, linewidth=1.5, zorder=0)
+        ax.axhline(0, color=t.grid, linewidth=1.5, zorder=0)
+        ax.axvline(0.5, color=t.grid, linewidth=1.5, zorder=0)
         ax.scatter(
             coef["rate_train"],
             coef["coef"],
-            color=ACCENT,
+            color=t.accent,
             s=36,
             zorder=3,
-            edgecolor=SURFACE,
+            edgecolor=t.surface,
             linewidth=1.5,
         )
         slope, intercept = np.polyfit(coef["rate_train"], coef["coef"], 1)
@@ -361,20 +404,20 @@ def coefficients_chart(
 def pair_matches_chart(pairs: pd.DataFrame, path: Path, title: str, dpi: int = 150) -> Path:
     """How many matches each teammate pair played together (log scale): the sample-size problem."""
     bins = np.logspace(0, np.log10(pairs["matches"].max() * 1.1), 30)
-    with plt.rc_context(STYLE):
+    with theme.style() as t:
         fig, ax = plt.subplots(figsize=(7, 4.5))
-        ax.hist(pairs["matches"], bins=bins, color=ACCENT, edgecolor=SURFACE, linewidth=1)
+        ax.hist(pairs["matches"], bins=bins, color=t.accent, edgecolor=t.surface, linewidth=1)
         ax.set_xscale("log")
         ax.set_xlim(left=10)
         for n in (100, 1000):
-            ax.axvline(n, color=TEXT_SECONDARY, linewidth=1, linestyle="--")
+            ax.axvline(n, color=t.text_secondary, linewidth=1, linestyle="--")
             ax.annotate(
                 f"95% CI ≈ ±{100 * 1.96 * np.sqrt(0.25 / n):.0f} pp",
                 (n, ax.get_ylim()[1] * 0.92),
                 xytext=(4, 0),
                 textcoords="offset points",
                 fontsize=8,
-                color=TEXT_SECONDARY,
+                color=t.text_secondary,
             )
         ax.xaxis.set_major_formatter(matplotlib.ticker.StrMethodFormatter("{x:,.0f}"))
         ax.set_xlabel("Matches the pair played together on the same team (train)")
@@ -398,26 +441,26 @@ def synergy_volcano_chart(
     """
     sig = pairs["p_holm"] < alpha
     y = -np.log10(pairs["p"].clip(lower=1e-300))
-    with plt.rc_context(STYLE):
+    with theme.style() as t:
         fig, ax = plt.subplots(figsize=(7, 5))
-        ax.axvline(0, color=GRID, linewidth=1.5, zorder=0)
+        ax.axvline(0, color=t.grid, linewidth=1.5, zorder=0)
         ax.axhline(
             -np.log10(alpha),
-            color=TEXT_SECONDARY,
+            color=t.text_secondary,
             linewidth=1,
             linestyle=":",
             label=f"p = {alpha} (no correction)",
         )
         ax.axhline(
             -np.log10(alpha / len(pairs)),
-            color=TEXT_PRIMARY,
+            color=t.text,
             linewidth=1.2,
             linestyle="--",
             label=f"Holm bar for {len(pairs):,} pairs",
         )
         for mask, color, label in [
-            (~sig, NEUTRAL, "not significant (Holm)"),
-            (sig, ACCENT, "significant (Holm)"),
+            (~sig, t.neutral, "not significant (Holm)"),
+            (sig, t.accent, "significant (Holm)"),
         ]:
             if not mask.any():
                 continue
@@ -442,7 +485,7 @@ def synergy_volcano_chart(
                 xytext=(5, 4 if k % 2 == 0 else -11),
                 textcoords="offset points",
                 fontsize=8,
-                color=TEXT_SECONDARY,
+                color=t.text_secondary,
             )
         ax.set_ylim(0, -np.log10(alpha / len(pairs)) * 1.12)
         ax.set_xlabel("Excess win rate together vs additive prediction (pp)")
@@ -456,21 +499,21 @@ def synergy_replication_chart(pairs: pd.DataFrame, path: Path, title: str, dpi: 
     """Each pair's synergy z on train (x) vs on test (y). Real synergy lines up; noise doesn't."""
     corr = np.corrcoef(pairs["z_train"], pairs["z_test"])[0, 1]
     lim = float(np.ceil(max(pairs["z_train"].abs().max(), pairs["z_test"].abs().max())))
-    with plt.rc_context(STYLE):
+    with theme.style() as t:
         fig, ax = plt.subplots(figsize=(6.5, 6.5))
-        ax.axhline(0, color=GRID, linewidth=1.5, zorder=0)
-        ax.axvline(0, color=GRID, linewidth=1.5, zorder=0)
+        ax.axhline(0, color=t.grid, linewidth=1.5, zorder=0)
+        ax.axvline(0, color=t.grid, linewidth=1.5, zorder=0)
         ax.plot(
             [-lim, lim],
             [-lim, lim],
-            color=TEXT_SECONDARY,
+            color=t.text_secondary,
             linewidth=1.2,
             label="same synergy in both",
         )
         ax.scatter(
             pairs["z_train"],
             pairs["z_test"],
-            color=ACCENT,
+            color=t.accent,
             s=14,
             alpha=0.6,
             linewidth=0,

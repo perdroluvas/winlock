@@ -2,6 +2,8 @@
 *.parquet
 data/raw/*
 !data/raw/.gitkeep
+# Hero portraits (Valve art, re-downloadable with `winlock portraits`)
+data/reference/portraits/
 
 # PDFs and local reference material
 *.pdf

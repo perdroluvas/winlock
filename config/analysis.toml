@@ -30,6 +30,15 @@ seed = 42
 dir = "reports/figures"
 tables_dir = "reports/tables"
 dpi = 150
+# "deadlock" (dark, game colors, art-deco frame) or "clean" (light, one accent).
+theme = "deadlock"
+
+[portraits]
+# Hero portraits for the win-rate chart, cached once by `winlock portraits` (art: Valve).
+api_url = "https://api.deadlock-api.com/v1/assets/heroes"
+image_key = "icon_image_small"
+dir = "data/reference/portraits"
+size_px = 64
 
 [evaluation]
 # Simulated train/test pairs per hero for the "nothing changed" coverage benchmark.

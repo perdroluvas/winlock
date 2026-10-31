@@ -3,9 +3,18 @@
 import numpy as np
 import pandas as pd
 import pytest
+from PIL import Image
 
-from winlock import figures
+from winlock import figures, theme
 from winlock.stats import add_wilson, binomial_vs_half
+
+
+@pytest.fixture(autouse=True, params=sorted(theme.THEMES))
+def each_theme(request):
+    """Every chart test runs once per theme."""
+    before = theme.active().name
+    yield theme.use(request.param)
+    theme.use(before)
 
 
 @pytest.fixture
@@ -34,6 +43,13 @@ def test_baseline_charts(heroes, tmp_path):
     check(figures.winrate_ci_chart(heroes, tmp_path / "a.png", "t"))
     check(figures.games_per_hero_chart(heroes, tmp_path / "b.png", "t"))
     check(figures.ci_width_vs_games_chart(heroes, tmp_path / "c.png", "t"))
+
+
+def test_winrate_chart_with_portraits(heroes, tmp_path):
+    # Portraits for two of the three heroes: the third keeps just its name.
+    for hero_id in (1, 2):
+        Image.new("RGBA", (16, 16), (200, 120, 10, 255)).save(tmp_path / f"{hero_id}.png")
+    check(figures.winrate_ci_chart(heroes, tmp_path / "p.png", "t", portraits_dir=tmp_path))
 
 
 def test_evaluation_charts(ev, tmp_path):
