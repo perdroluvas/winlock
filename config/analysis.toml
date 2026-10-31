@@ -1,17 +1,46 @@
-# Parâmetros da análise. Código lê daqui; nada de números mágicos em src/.
+# Analysis parameters. Code reads from here; no magic numbers in src/.
 
 [data]
-# Residual de 20/10/2026, janela de created_at 02:03–22:13 UTC (tabela match_player).
+# 2026-10-20 residual, created_at window 02:03–22:13 UTC (match_player table).
 match_player = "data/raw/20261020T020300Z-20261020T221300Z-50a132fe33c6.parquet"
 heroes = "data/reference/heroes.csv"
 
 [population]
-# Definida ANTES de olhar as taxas (ver docs/decisions.md).
+# Defined BEFORE looking at the rates (see docs/decisions.md).
 game_mode = "Normal"
 match_mode = ["Unranked", "Ranked"]
 match_outcome = "TeamWin"
+# UTC day of start_time; the file also holds late-ingested older matches.
+start_day = "2026-10-20"
+# A complete match has 12 players: 6 winners and 6 losers. Others are dropped whole.
+players_per_match = 12
+wins_per_match = 6
+
+[split]
+# Temporal: the first 70% of matches by start_time are train, the rest test.
+method = "temporal"
+train_fraction = 0.7
 
 [stats]
 alpha = 0.05
 ci_method = "wilson"
 seed = 42
+
+[figures]
+dir = "reports/figures"
+tables_dir = "reports/tables"
+dpi = 150
+
+[evaluation]
+# Simulated train/test pairs per hero for the "nothing changed" coverage benchmark.
+n_sims = 10000
+
+[model]
+# The last 20% of train (by start_time) picks the regularization strength; test is used once.
+validation_fraction = 0.2
+C_grid = [0.001, 0.01, 0.1, 1.0, 10.0]
+
+[synergy]
+# Teammate pairs only. No minimum: every pair seen at least once is tested (user's choice), so
+# the article can show how many tests one day forces and how few pairs have enough games.
+min_pair_matches = 1

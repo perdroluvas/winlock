@@ -1,7 +1,7 @@
 [project]
 name = "winlock"
 version = "0.1.0"
-description = "Win rate de heróis de Deadlock: sinal ou ruído estatístico?"
+description = "Deadlock hero win rates: signal or statistical noise?"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -10,10 +10,15 @@ dependencies = [
     "numpy",
     "pandas",
     "pyarrow",
+    "scikit-learn>=1.9.1",
     "scipy",
     "seaborn",
     "statsmodels",
 ]
+
+[project.scripts]
+db-reader = "winlock.db_reader:main"
+winlock = "winlock.cli:main"
 
 [dependency-groups]
 dev = [

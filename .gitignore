@@ -1,11 +1,9 @@
-# Dados brutos e derivados (nunca versionar)
+# Raw and derived data (never version)
 *.parquet
 data/raw/*
 !data/raw/.gitkeep
-data/interim/*
-!data/interim/.gitkeep
 
-# PDFs e material de referência local
+# PDFs and local reference material
 *.pdf
 
 # Python / uv
@@ -17,12 +15,13 @@ __pycache__/
 .ruff_cache/
 .ipynb_checkpoints/
 
-# Ambiente e segredos
+# Environment and secrets
 .env
 .env.*
 !.env.example
 
-# SO / editores
+# OS / editors
+.helix/
 .DS_Store
 .idea/
 .vscode/
