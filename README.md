@@ -1,22 +1,24 @@
 # winlock
 
-**Is a Deadlock hero's win rate reliable, or is it statistical noise?**
+**Is a Deadlock hero's win rate reliable, or is it statistical noise? And what does a game
+update do to it?**
 
-Win rate per hero with Wilson confidence intervals, using public data from the
-[Deadlock API](https://api.deadlock-api.com/docs).
+Win rate per hero with Wilson confidence intervals, before and after Deadlock's
+**"Halloween 2026 + Gameplay Update"** (published 2026-10-30 20:51:49 UTC). It uses public match
+data from the [Deadlock API](https://deadlock-api.com/data-dumps).
 
 ## Data
 
-- Source: residual snapshot of the `match_player` table (one row per player per match).
-- File: `data/raw/20261020T020300Z-20261020T221300Z-50a132fe33c6.parquet` (~1.6 GB, not in git).
-- The file is cut by `created_at` (2026-10-20, 02:03–22:13 UTC), but only 55.5% of its rows are
-  matches that **started** on 2026-10-20; the rest are older matches ingested late
-  (back to 2024-06-24).
-- Analysis period: matches with `start_time` on 2026-10-20 (UTC).
-- Patch / game version: unknown. `game_mode_version` is 2 for the whole day (no change inside
-  the window), but the column is undocumented. New heroes released in the week before (Violet
-  on 10-16, Deadman Danny on 10-13, Solomon on 10-09) and on the day itself (Nurse Harrow)
-  suggest a recently updated game.
+- Source: the `match_player` table of the public data dumps (one row per player per match).
+- `uv run winlock extract` reads only the files and row groups that can hold matches started
+  2026-10-28 → 10-31 UTC, and only 18 columns, over HTTPS. It then deduplicates rows that
+  appear in more than one dump file.
+  - Run of 2026-11-08 16:30 UTC: 11,420,407 rows and 1,016,323 matches, in
+    `data/raw/patch_window/20261108T1630Z/` (not in git).
+- **Late arrivals:** only ~55% of a day's matches reach the dumps within a day of starting,
+  and 71–78% within 3 days. Rows were still arriving at extraction time.
+- **The update in the data:** `game_mode_version` doesn't change (it follows the game mode).
+  The update shows as a dip in match starts: from ~2,000 per 10 min to 219 at 20:50 UTC.
 
 ## How to run
 
@@ -28,81 +30,89 @@ make test    # tests
 make lint    # ruff
 make nb      # open Jupyter Lab
 
-uv run winlock quality            # data checks: start days, start hours, complete matches
-uv run winlock figures            # population report + train baseline charts in reports/
-uv run winlock evaluate           # do the train win rates hold on test? + split-half control
-uv run winlock model              # predict match winners from heroes, scored on test
-uv run winlock synergy            # teammate pairs: do some win more than their parts predict?
-
-uv run db-reader schema           # inspect the parquet from the terminal
-uv run db-reader head -n 10
-uv run db-reader sql "SELECT ... FROM match_player"
+uv run winlock extract     # read the window from the public data dumps (network, ~30 s)
+uv run winlock quality     # population, window sizes, the dip in match starts at the update
+uv run winlock figures     # Wilson CI per hero, 24 h before and 24 h after the update
+uv run winlock patch       # how did win rates change across the update? (+ placebo)
+uv run winlock model       # logistic regression: before vs after the update, retraining
 ```
+
+Charts go to `reports/figures/` (8 charts), tables to `reports/tables/`. The notebooks
+`01_winrates` and `02_model` show the charts in article order.
 
 ## Method
 
-1. Population (`uv run winlock figures`): Normal, Unranked/Ranked matches that started on
-   2026-10-20 UTC, complete matches only (12 players, 6 winners).
-2. Temporal split: the first 70% of matches (00:00–13:35 UTC) are train, the last 30% are test.
-3. Baseline: win rate per hero on train with a 95% Wilson CI, and an exact binomial test
-   against 50% with Holm/BH correction over the 43 heroes.
-4. Evaluation (`uv run winlock evaluate`): train vs test per hero (z-score, Holm/BH), and
-   coverage of the train CIs compared with a "nothing changed" simulation. Split-half control:
-   the same comparison between even and odd `match_id`s, which cover the same hours.
-5. Model (`uv run winlock model`): predict the winner of test matches from the heroes alone
-   (constant, win-rate model, logistic regression), with a Wilson CI on accuracy.
-6. Synergy (`uv run winlock synergy`): per teammate pair, wins together vs the additive
-   prediction (z, Holm/BH) on train, replication on test, and a model with pair terms.
+1. **Population** (`quality`):
+   - Normal mode, Unranked + Ranked, `TeamWin`;
+   - complete matches only (12 players, 6 winners);
+   - new-player, low-priority and not-scored matches are kept.
+2. **Windows**, fixed before any post-update rate was computed (`[windows]` in
+   `config/analysis.toml`, `docs/decisions.md`):
 
-Charts go to `reports/figures/`, tables to `reports/tables/`; `notebooks/` shows the charts.
+   | Window | Start → end (UTC, by `start_time`) | Matches | Used for |
+   |---|---|---|---|
+   | `train` | 10-28 00:00 → 10-29 20:30 | 361,004 | fitting the model |
+   | `placebo_pre` | 10-28 20:30 → 10-29 20:30 | 199,607 | placebo, first half |
+   | `pre` | 10-29 20:30 → 10-30 20:30 | 203,085 | last 24 h of the old game; test |
+   | `post` | 10-30 21:30 → 10-31 21:30 | 229,335 | first 24 h of the new game; test |
+
+   Matches started 20:30–21:30 on 10-30 belong to no window (the buffer around the update).
+3. **Win rates** (`figures`): 95% Wilson CI per hero, plus an exact binomial test against 50%
+   with Holm/BH over 44 heroes.
+4. **The update** (`patch`):
+   - per hero, pre vs post: the change, its z, Holm/BH;
+   - the **placebo**: the same comparison 24 h earlier, entirely before the update.
+5. **Logistic regression** (`model`):
+   - one row per match: +1 for each hero on Team0, −1 for each on Team1; target "Team0 won";
+   - L2 penalty, C chosen on the last 20% of train in time;
+   - compared with a coin flip and with summed win rates (no fitting);
+   - tested on pre and on post, accuracy with a Wilson CI, plus log loss and calibration;
+   - **retrain check:** refit on the first 70% of post, then score the old and the refit model
+     on the same last 30%.
 
 ## What was discarded and why
 
-- Matches whose `start_time` is not on 2026-10-20 UTC (44.5% of rows): late-ingested older
-  matches from other days and patches. See `docs/decisions.md`.
-- StreetBrawl matches (8,499 of the remaining matches): another game mode with ~8 players.
-- Matches outside Unranked/Ranked (433 matches).
-- Incomplete matches (95 after the other filters): not exactly 12 rows and 6 winners. They are
-  dropped whole.
-- Final population: 41,685 matches (500,220 rows), split in time into 70% train / 30% test
-  (`uv run winlock figures` prints this report).
+Of 1,016,323 extracted matches:
+- **Outside the windows' span** (10-31 21:30 → 24:00): 33,250 matches.
+- **StreetBrawl** (another mode, ~8 players): 174,840 matches.
+- **Not Unranked/Ranked** (CoopBot, PrivateLobby, Tutorial): 6,850 matches.
+- **Incomplete** (not 12 rows and 6 winners): 1,589 matches, dropped whole.
+
+Population: 799,794 matches (9,597,528 rows). Matches inside the 10-30 20:30–21:30 buffer are in
+the population but in no window.
 
 ## Result
 
-Numbers from `reports/tables/`; all on 2026-10-20 UTC.
+Numbers from `reports/tables/`. The full story is in `docs/article-outline.md`.
 
-1. **Hero win rates are signal, not noise.** On train, win rates range from 42.9% (Mirage) to
-   56.9% (Graves). **32 of 43 heroes differ from 50% after Holm correction** (36 by their
-   individual CIs, 35 after BH).
-2. **They hold over the day.** Train vs test: correlation 0.98, and no hero changed
-   significantly (0 after Holm or BH). 83.7% of test rates fall inside their train CI; with no
-   change at all the expected value is ~72%, not 95%, because the test rate is noisy too.
-3. **The binomial standard error is honest here.** In the split-half control (same hours), the
-   SD of z is 0.98 (1.00 = pure binomial noise) and coverage matches the simulation. Train →
-   test is even *more* stable than chance (SD of z 0.76, borderline: 2.3% of simulations are
-   that stable); this is not explained.
-4. **Heroes predict matches.** Knowing only the 12 heroes, logistic regression calls 60.1% of
-   test matches correctly (95% Wilson CI 59.3–61.0%; constant baseline 49.4%), log loss 0.663 vs
-   0.693, well calibrated. The win rates alone, without fitting, reach 59.8%.
-5. **Teammate synergy: there is some overall, but no single pair can be named.** Of 903 pairs, 0
-   pass Holm or BH; 73 have p < 0.05 where ~45 are expected by chance, and pair z-scores
-   replicate from train to test (correlation 0.24, noise band ±0.065). Adding 946 pair terms to
-   the model makes test predictions slightly worse (log loss +0.0022, 95% CI +0.0010 to
-   +0.0035).
+1. **Win rates are signal, not noise.**
+   - In the 24 h before the update, they range from 44.2% (Pocket) to 57.7% (Graves).
+   - 42 of 44 heroes differ from 50% after Holm.
+   - With ~60k games per hero, the median 95% CI is ±0.4 pp.
+2. **The update changed them.**
+   - 20 of 44 heroes changed after Holm, SD of z 5.96.
+   - The placebo, at a fake cut, finds 0 of 44 (SD of z 0.87).
+   - Biggest moves: Violet −5.6 pp, Mo & Krill −5.5, Warden +3.4, McGinnis +3.3.
+3. **Heroes alone predict ~60% of matches.**
+   - Logistic regression on pre: 59.9% (95% CI 59.7–60.2%), log loss 0.663.
+   - Summed win rates, no fitting: 59.7%. A coin flip: 50.1%.
+4. **What it learned:** the weights correlate 0.95 with the win rates. The exception is
+   McGinnis: a 48.3% win rate, but a positive weight.
+5. **The update costs the model about 1 point, and retraining recovers it.**
+   - The same model after the update: 58.8% (58.6–59.1%).
+   - Refit on early post-update matches: 59.9%, against the old model's 58.8% on the same
+     matches (log loss −0.0058, 95% CI −0.0066 to −0.0049).
 
 ## Limitations
 
-- **One day, one (unknown) patch.** Results describe 2026-10-20 only; balance changes can move
-  everything.
-- **Train is morning, test is evening** (00:00–13:35 vs 13:35–22:00 UTC). Differences mix
-  "time passed" with "different players online"; the split-half control checks noise but not
-  this.
-- **Players, not heroes.** A win rate measures who plays a hero as much as the hero: new heroes
-  attract learners, strong players favour some picks, and `party` is empty, so groups who
-  queue together can't be separated. The same applies to pair "synergy".
-- **Non-independence.** 12 players per match and players repeating across matches; the
-  split-half control suggests the binomial SE is still about right on this day.
-- **The test set was used twice** (first models, then synergy). Nothing was tuned on it, but the
-  synergy analysis was designed after seeing the first results.
-- **Nurse Harrow** (released on the day) only appears in test and is not evaluated.
-- **Skill** (`average_badge`) exists only for Ranked (24% of rows) and was not analysed.
+- **Two days around one update.** The post side is Friday evening → Saturday evening; the pre
+  side is Thursday → Friday. A weekday/weekend player mix isn't separated from the patch, and
+  the placebo doesn't cover a weekend.
+- **The Halloween event** (candy buffs) runs only on the post side.
+- **New heroes** (Violet, Nurse Harrow, Deadman Danny…) were still being learned. The placebo
+  shows no drift for them inside the old game, though.
+- **Late arrivals:** the data was still filling in. A re-extraction can check that late
+  matches don't change the result.
+- **Players, not heroes.** A win rate measures who plays the hero as much as the hero, and
+  `party` isn't available. Player clustering of the CIs isn't checked yet.
+- **Skill** (`average_badge`) exists only for Ranked and isn't analysed.

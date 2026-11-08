@@ -5,14 +5,17 @@ then ML). Delivering the result comes second. Respond in English.
 
 ## The project
 
-- **Question:** is a Deadlock hero's win rate reliable, or is it statistical noise?
+- **Question:** is a Deadlock hero's win rate reliable, or is it statistical noise? Framed
+  around the "Halloween 2026 + Gameplay Update" (2026-10-30 20:51:49 UTC): 24 h before vs 24 h
+  after, with a placebo. Article skeleton: `docs/article-outline.md` (the user writes the prose).
 - **Week 1 (priority):** win rate per hero with a 95% Wilson CI, a sorted horizontal chart with the
   50% line highlighted, and a post. Plans live in `docs/references/`; read them before discussing
   scope.
 - **Extension (only after the base chart exists):** day-to-day stability with a per-hero z-score,
   a split-half control (`match_id % 2`) and Holm/BH correction.
-- **Data:** `match_player` (1 row per player per match, 157 columns) in `data/raw/`, ~1.6 GB.
-  Parameters in `config/analysis.toml`.
+- **Data:** `match_player` (1 row per player per match), extracted by `winlock extract` for
+  matches started 10-28 → 10-31 UTC (18 columns, ~11.4M rows) into `data/raw/patch_window/`.
+  Parameters and the named time windows in `config/analysis.toml`.
 
 ### Structure
 
@@ -20,16 +23,16 @@ then ML). Delivering the result comes second. Respond in English.
 |---|---|
 | `src/winlock/config.py` | reads `config/analysis.toml` |
 | `src/winlock/db.py` | DuckDB connection and parquet reading |
-| `src/winlock/population.py` | filters that define the population |
+| `src/winlock/extract.py` | `winlock extract`: reads a time window from the public data dumps over HTTPS (manifest → files → projected read → dedup) |
+| `src/winlock/population.py` | filters that define the population; named windows (`[windows]`) |
 | `src/winlock/quality.py` | data checks (start days/hours, 12 rows/match); `winlock quality` |
-| `src/winlock/stats.py` | Wilson, binomial test, z-score, multiple-comparison corrections |
-| `src/winlock/evaluation.py` | compare two samples of hero rates (train/test, split-half) |
-| `src/winlock/model.py` | match-outcome models (heroes → winner), scored on the test split |
-| `src/winlock/synergy.py` | teammate-pair synergy: per-pair tests, replication, pair model |
+| `src/winlock/stats.py` | Wilson, binomial test, z-score, Holm/BH, prediction metrics |
+| `src/winlock/evaluation.py` | compare two samples of hero rates (before/after the update, placebo) |
+| `src/winlock/model.py` | logistic regression (heroes → winner): fit on train, tested before/after the update, retrain check |
 | `src/winlock/figures.py` | charts for the post |
 | `src/winlock/theme.py` | chart themes (`deadlock` / `clean`): palette, fonts, art-deco frame |
 | `src/winlock/portraits.py` | hero portraits: `winlock portraits` caches them in `data/reference/portraits/` |
-| `src/winlock/cli.py`, `__main__.py` | entry point: `winlock quality / figures / evaluate / model / synergy / portraits`; loads, calls, prints, saves (no analysis logic) |
+| `src/winlock/cli.py`, `__main__.py` | entry point: `winlock extract / quality / figures / patch / model / portraits`; loads, calls, prints, saves (no analysis logic) |
 | `notebooks/` | charts only; the user writes the text. No logic of its own |
 | `tests/` | one test file per module, plus chart smoke tests (fake matches in `conftest.py`) |
 | `reports/figures`, `reports/tables` | final outputs |
@@ -82,7 +85,7 @@ Use it to review the user's work and call out anything missing:
 
 ## Data and privacy
 
-- The parquet is ~1.6 GB: **never** `pd.read_parquet` the whole file. Use DuckDB with column
+- The parquet holds ~11M rows: **never** `pd.read_parquet` the whole file. Use DuckDB with column
   selection and `WHERE`, and bring only aggregates into pandas.
 - `data/` stays out of git. Never version `.parquet` files.
 - **`account_id` identifies players**: never print it, save it to `reports/`, put it in charts,

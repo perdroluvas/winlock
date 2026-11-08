@@ -4,6 +4,108 @@ One entry per decision. Format: context → decision → consequence. Newest fir
 
 ---
 
+## 2026-11-08: The article focuses on the logistic regression
+
+**Context.** The rebuild produced many analyses: win rates, patch, placebo, picks/bans, Ranked vs
+Unranked, model, synergy. That's too much for one undergraduate article.
+
+**Decision.** (user's choice)
+- The article covers win rates before vs after the update (Wilson CI, Holm) and the **logistic
+  regression**: how well it predicts winners, what it learned, how the update breaks it, and
+  retraining. The pairs model is a short extension.
+- Picks/bans and Ranked vs Unranked are left out of the article and notebooks. The code and
+  commands stay.
+- The placebo stays as one sentence: it shows the before/after changes aren't the usual daily
+  variation.
+- No new models, and no uncertainty bands on the weights.
+- **The code is trimmed to match** (user's choice, so the repo stays small enough to own):
+  - removed: `picks.py`, `synergy.py`, the `evaluate`/`picks`/`synergy` commands, the
+    coverage simulation and split-half control, 9 chart functions, their tests and tables;
+  - kept: 8 charts (the update dip, win rates before/after, the before/after scatter, model
+    accuracy, coefficients, retraining, calibration) in two notebooks, `01_winrates` and
+    `02_model`;
+  - the placebo is still computed and printed by `winlock patch`, but has no chart.
+  - Everything removed is in git history.
+
+**Consequence.** `docs/article-outline.md` is restructured around the regression (7 parts, with
+the teammate-pairs extension dropped). The numbers didn't change after the trim.
+
+---
+
+## 2026-11-08: One story about the update; the 2026-10-20 analysis is removed
+
+**Context.** The 2026-10-20 file turned out to be a residual fragment: ~42k Normal matches,
+where a full day has ~200k. Its patch was unknown. The patch window (10-28 → 10-31) is
+complete enough, has a known intervention and supports every earlier analysis with 5–9× more
+data. Two parallel analyses would make the article harder to follow.
+
+**Decision.** (user's choices)
+- **Removed:** the 10-20 tables, figures, config (`start_day`, `[split]`, the data path),
+  README results and article numbers. The earlier entries below stay as history. The raw
+  10-20 parquet is left on disk but nothing reads it.
+- **Named windows** in `[windows]` replace `start_day` and the 70/30 split. The dates are the
+  ones fixed earlier today, before any post-patch rate was computed:
+  - `train`: 10-28 00:00 → 10-29 20:30;
+  - `placebo_pre`: 10-28 20:30 → 10-29 20:30;
+  - `pre`: 10-29 20:30 → 10-30 20:30;
+  - `post`: 10-30 21:30 → 10-31 21:30.
+
+  `[comparisons]` names the windows each comparison uses. Windows overlap, so analyses select
+  them by `start_time` instead of a per-row label.
+- **ML:** fit on `train` (C chosen on its last 20% in time), then test on `pre` (same game)
+  and on `post` (new game).
+  - **Retrain check:** refit on the first 70% of `post` and score the old and the refit model
+    on the **same** last 30%, compared match by match with the paired log-loss difference.
+- **Evaluation and synergy** use train → test = `train` → `pre`, entirely in the old game. The
+  split-half control runs inside `pre`. The synergy volcano chart is dropped.
+- **Picks and bans:**
+  - pick rate = matches the hero was picked in / matches;
+  - ban rate = matches the hero was banned in / matches, where a match's bans are the union
+    over its rows;
+  - both get Wilson CIs, and the before/after change gets z with Holm/BH, like the win rates.
+- **Ranked vs Unranked:** the patch and placebo comparisons are repeated inside each mode.
+
+**Consequence.** Each window holds ~200–360k matches, so most per-hero CIs are about ±0.4 pp
+wide. Almost every hero now "differs from 50%", which makes effect sizes and the placebo the
+real evidence, not p-values.
+- The `pre` test window is used by the evaluation, the models and synergy, so treat it as a
+  reused test set.
+- `post` is used once by the old model and split 70/30 for the retrain check.
+
+---
+
+## 2026-11-08: Patch comparison windows, buffer and placebo (fixed before any post-patch rate)
+
+**Context.** `winlock extract` (run 2026-11-08 16:30 UTC) gave 1,016,323 matches started
+10-28..10-31 UTC. Normal match starts drop from ~2,000 to 218 per 10 min around the update
+(10-30 20:51:49 UTC) and recover by 21:30. `game_mode_version` is 2 on both sides, so it is not
+a patch marker; the cut has to be by `start_time`. Duplicates in the dumps are identical copies
+(no row was re-sent with a different `created_at`), so `first_created_at` = arrival time.
+
+**Decision.** (in `[comparisons]` of `config/analysis.toml`, chosen by the user)
+- **Buffer:** matches started 10-30 20:30–21:30 UTC belong to neither side.
+- **Patch:** before = 10-29 20:30 → 10-30 20:30, after = 10-30 21:30 → 10-31 21:30 (24 h each,
+  so both sides cover one full day cycle).
+- **Placebo:** the same comparison at a fake cut 24 h earlier (10-28 20:30 → 10-29 20:30 vs
+  10-29 20:30 → 10-30 20:30), entirely before the update: what the method finds when nothing
+  changed.
+- Same population rules as the 10-20 analysis (Normal, Unranked + Ranked, TeamWin, complete
+  12-player/6-win matches). Every hero is tested, Holm and BH across heroes.
+- Matches flagged `new_player_pool`, `low_pri_pool` or `not_scored` (3.9%) are **kept**
+  (`exclude_flags = []`), so the population matches Part 1 (user's choice).
+- The extracted run is used as is; a later re-extraction checks whether late arrivals change
+  the result.
+
+**Consequence.** Complete matches: patch before 203,085, after 229,335; placebo before 199,607,
+after 203,085 (the placebo's "after" is the patch's "before"). Limitations: the post side is
+Friday evening → Saturday evening, the pre side Thursday → Friday, so a weekday/weekend player
+mix difference is not separated from the patch (the placebo is Wednesday → Thursday vs
+Thursday → Friday, so it does not cover a weekend either); the Halloween event runs on the post
+side only; ~22–29% of each day's matches arrived more than 3 days late, and rows were still
+arriving at extraction time.
+
+---
+
 ## 2026-10-31: Deadlock-style chart theme with hero portraits
 
 **Context.** The charts used a plain light reference style. For the post we wanted them to look
@@ -25,6 +127,29 @@ like the game.
 
 **Consequence.** The charts no longer depend on the theme in their logic, and both looks are
 tested. The portraits need one network step on a new machine.
+
+---
+
+## 2026-10-31: Reframe around the Halloween 2026 update; extract the patch window
+
+**Context.** The 2026-10-20 analysis answered "is a single day's win rate signal or noise?". On
+2026-10-30 20:51 UTC Valve published "Halloween 2026 + Gameplay Update": 35 heroes changed,
+~50 items, mid-boss and comeback mechanics, the 6 newest heroes became bannable, plus a
+Halloween event. A known intervention gives a stronger test: do win rates move when the game
+changes, more than they move between two ordinary days?
+
+**Decision.**
+- Analyse **every hero** (no directional predictions per hero), with Holm/BH, before vs after.
+- Windows (to be fixed in the population config before looking at post-patch rates): placebo
+  10-28 20:51 → 10-29 20:51, pre 10-29 20:51 → 10-30 20:51, post 10-30 20:51 → 10-31 20:51.
+- Data from the public dumps with `winlock extract`: whole UTC days 10-28..10-31 (a superset),
+  only 18 columns, deduplicated per (match_id, player_slot) keeping the newest created_at
+  (anonymous players share account_id 0, so account_id can't be the key). First run on
+  2026-10-31 ~21:00 UTC; a second run ~2026-11-02 for late arrivals, compared via meta.json.
+- 2026-10-20 stays as the development dataset where the methods were built.
+
+**Consequence.** The update bundles many changes and an event on a Friday→Saturday boundary:
+the analysis can say "the update window changed X", not "nerf Y caused X".
 
 ---
 
