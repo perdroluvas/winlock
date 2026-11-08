@@ -6,6 +6,7 @@ Usage:
     uv run winlock evaluate     # do the train win rates hold on test? + split-half control
     uv run winlock model        # can the heroes in a match predict the winner on test?
     uv run winlock synergy      # do some teammate pairs win more than their parts predict?
+    uv run winlock extract      # read a time window from the public data dumps (network)
     uv run winlock portraits    # download hero portraits once for the win-rate chart (network)
 """
 
@@ -16,7 +17,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from winlock import evaluation, figures, model, portraits, quality, synergy, theme
+from winlock import evaluation, extract, figures, model, portraits, quality, synergy, theme
 from winlock.config import load_config, resolve_path
 from winlock.db import connect, load_heroes
 from winlock.population import (
@@ -330,12 +331,47 @@ def cmd_portraits() -> None:
     print(f"Downloaded {len(written)} portraits; {cached} of {len(hero_ids)} heroes cached")
 
 
+def cmd_extract(dry_run: bool = False) -> None:
+    cfg = load_config()
+    meta = extract.run_extract(cfg, resolve_path(cfg["extract"]["out_dir"]), dry_run=dry_run)
+    gap = meta["ingestion_gap_hours"]
+    print(
+        f"Manifest v{meta['manifest_version']} ({meta['manifest_generated_at']}), "
+        f"generation {meta['generation']}, ingested up to {meta['watermark_hi']}"
+    )
+    print(f"Window {meta['window_start']} -> {meta['window_end']}")
+    if gap > 0:
+        print(f"  WARNING: the last {gap:.1f} h of the window are not ingested yet")
+    print("  (late arrivals: rerun a day or two after the window ends to complete it)")
+    probes = ", ".join(f"{p}: {t[5:16]}" for p, t in meta["partition_starts_probed"].items())
+    print(f"Partition starts probed (footers only): {probes}")
+    print(f"Partitions holding the window: {meta['partitions']}")
+    print(
+        f"Files selected: {len(meta['files'])} {meta['files_by_kind']}, "
+        f"{meta['files_gb']} GB whole (only the needed columns/row groups are read)"
+    )
+    if dry_run:
+        print("Dry run: nothing read.")
+        return
+    s = meta["summary"]
+    print(
+        f"Rows read: {meta['rows_raw']:,}; after deduplication: {meta['rows_final']:,} "
+        f"({meta['duplicates_removed']:,} duplicates removed)"
+    )
+    print(
+        f"Matches: {s['matches']:,}; start {s['start_min']} -> {s['start_max']}; "
+        f"created {s['created_min']} -> {s['created_max']}"
+    )
+    print(f"Wrote {Path(meta['output']).relative_to(resolve_path('.'))} (+ meta.json)")
+
+
 COMMANDS = {
     "quality": (cmd_quality, "data checks: start days, start hours, complete matches"),
     "figures": (cmd_figures, "population report + train baseline charts"),
     "evaluate": (cmd_evaluate, "train vs test win rates + split-half control"),
     "model": (cmd_model, "predict match winners from heroes, scored on test"),
     "synergy": (cmd_synergy, "teammate pair synergy: per-pair tests + model with pair terms"),
+    "extract": (cmd_extract, "read a time window from the public data dumps (network)"),
     "portraits": (cmd_portraits, "download hero portraits once (network) for the win-rate chart"),
 }
 
@@ -345,8 +381,11 @@ def main() -> None:
     sub = parser.add_subparsers(dest="command", required=True)
     for name, (_, help_text) in COMMANDS.items():
         sub.add_parser(name, help=help_text)
-    args = parser.parse_args()
-    COMMANDS[args.command][0]()
+    sub.choices["extract"].add_argument(
+        "--dry-run", action="store_true", help="only list the files that would be read"
+    )
+    args = vars(parser.parse_args())
+    COMMANDS[args.pop("command")][0](**args)
 
 
 if __name__ == "__main__":

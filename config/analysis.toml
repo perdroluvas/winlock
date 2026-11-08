@@ -53,3 +53,27 @@ C_grid = [0.001, 0.01, 0.1, 1.0, 10.0]
 # Teammate pairs only. No minimum: every pair seen at least once is tested (user's choice), so
 # the article can show how many tests one day forces and how few pairs have enough games.
 min_pair_matches = 1
+
+[patch]
+# "Halloween 2026 + Gameplay Update" (Steam announcement). 35 heroes, ~50 items, mid-boss,
+# comeback mechanics; the 6 newest heroes became bannable; Halloween event until 2026-11-02.
+title = "Halloween 2026 + Gameplay Update"
+published_at = "2026-10-30T20:51:49Z"
+
+[extract]
+# Public data dumps (https://deadlock-api.com/data-dumps). Whole UTC days 10-28..10-31: a
+# superset of the days around the update.
+manifest_url = "https://data.deadlock-api.com/v1/manifest.json"
+table = "match_player"
+window_start = "2026-10-28T00:00:00Z"
+window_end = "2026-11-01T00:00:00Z"
+out_dir = "data/raw/patch_window"
+http_retries = 8
+# player_slot is only for deduplication; account_id only for the player-clustering check
+# (stays in data/raw/, never printed or saved to reports/).
+columns = [
+    "match_id", "player_slot", "account_id", "hero_id", "team", "won",
+    "start_time", "created_at", "game_mode", "match_mode", "match_outcome",
+    "game_mode_version", "average_badge", "duration_s",
+    "not_scored", "low_pri_pool", "new_player_pool", "banned_hero_ids",
+]
