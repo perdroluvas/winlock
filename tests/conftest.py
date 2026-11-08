@@ -13,12 +13,16 @@ CFG = {
         "game_mode": "Normal",
         "match_mode": ["Unranked", "Ranked"],
         "match_outcome": "TeamWin",
-        "start_day": "2026-10-20",
         "players_per_match": 12,
         "wins_per_match": 6,
     },
-    "split": {"method": "temporal", "train_fraction": 0.7},
+    # Matches start at 00:00, 01:00, ..., 09:00: train holds the first 7, test the last 3.
+    "windows": {
+        "train": ["2026-10-20T00:00:00Z", "2026-10-20T07:00:00Z"],
+        "test": ["2026-10-20T07:00:00Z", "2026-10-20T10:00:00Z"],
+    },
 }
+TRAIN, TEST = (tuple(CFG["windows"][k]) for k in ("train", "test"))
 DAY = datetime(2026, 10, 20, tzinfo=UTC)
 
 

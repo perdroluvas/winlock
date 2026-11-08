@@ -1,8 +1,8 @@
 # Analysis parameters. Code reads from here; no magic numbers in src/.
 
 [data]
-# 2026-10-20 residual, created_at window 02:03–22:13 UTC (match_player table).
-match_player = "data/raw/20261020T020300Z-20261020T221300Z-50a132fe33c6.parquet"
+# `winlock extract` run of 2026-11-08 16:30 UTC: matches started 10-28..10-31 UTC, deduplicated.
+match_player = "data/raw/patch_window/20261108T1630Z/match_player.parquet"
 heroes = "data/reference/heroes.csv"
 
 [population]
@@ -10,16 +10,12 @@ heroes = "data/reference/heroes.csv"
 game_mode = "Normal"
 match_mode = ["Unranked", "Ranked"]
 match_outcome = "TeamWin"
-# UTC day of start_time; the file also holds late-ingested older matches.
-start_day = "2026-10-20"
 # A complete match has 12 players: 6 winners and 6 losers. Others are dropped whole.
 players_per_match = 12
 wins_per_match = 6
-
-[split]
-# Temporal: the first 70% of matches by start_time are train, the rest test.
-method = "temporal"
-train_fraction = 0.7
+# Boolean columns whose flagged rows are removed; a match with any flagged player then fails
+# the 12-row check and is dropped whole. Empty: new-player/low-priority/not-scored are kept.
+exclude_flags = []
 
 [stats]
 alpha = 0.05
@@ -40,29 +36,27 @@ image_key = "icon_image_small"
 dir = "data/reference/portraits"
 size_px = 64
 
-[evaluation]
-# Simulated train/test pairs per hero for the "nothing changed" coverage benchmark.
-n_sims = 10000
-
 [model]
-# The last 20% of train (by start_time) picks the regularization strength; test is used once.
+# The last 20% of train (by start_time) chooses the regularization strength C; test is never used for it.
 validation_fraction = 0.2
+# Retrain check: the first 70% (in time) of the post window refits the model, the rest scores
+# both the old (pre-update) and the refit model on the same matches.
+post_fit_fraction = 0.7
 C_grid = [0.001, 0.01, 0.1, 1.0, 10.0]
-
-[synergy]
-# Teammate pairs only. No minimum: every pair seen at least once is tested (user's choice), so
-# the article can show how many tests one day forces and how few pairs have enough games.
-min_pair_matches = 1
 
 [patch]
 # "Halloween 2026 + Gameplay Update" (Steam announcement). 35 heroes, ~50 items, mid-boss,
 # comeback mechanics; the 6 newest heroes became bannable; Halloween event until 2026-11-02.
 title = "Halloween 2026 + Gameplay Update"
 published_at = "2026-10-30T20:51:49Z"
+# Quality chart of match starts around the update (the dip), and the buffer it motivates.
+dip_window = ["2026-10-30T17:00:00Z", "2026-10-31T01:00:00Z"]
+dip_bin_minutes = 10
+buffer = ["2026-10-30T20:30:00Z", "2026-10-30T21:30:00Z"]
 
 [extract]
 # Public data dumps (https://deadlock-api.com/data-dumps). Whole UTC days 10-28..10-31: a
-# superset of the days around the update.
+# superset of the analysis windows defined in [windows] below.
 manifest_url = "https://data.deadlock-api.com/v1/manifest.json"
 table = "match_player"
 window_start = "2026-10-28T00:00:00Z"
@@ -77,3 +71,19 @@ columns = [
     "game_mode_version", "average_badge", "duration_s",
     "not_scored", "low_pri_pool", "new_player_pool", "banned_hero_ids",
 ]
+
+[windows]
+# Fixed 2026-11-08, BEFORE any post-patch rate was computed (docs/decisions.md). [start, end)
+# in UTC, on start_time. Starts 10-30 20:30-21:30 (the update at 20:51:49 and the dip in match
+# starts around it) are a buffer that belongs to no window.
+train = ["2026-10-28T00:00:00Z", "2026-10-29T20:30:00Z"]        # ML fit (+ C validation)
+placebo_pre = ["2026-10-28T20:30:00Z", "2026-10-29T20:30:00Z"]  # placebo's first 24 h
+pre = ["2026-10-29T20:30:00Z", "2026-10-30T20:30:00Z"]          # last 24 h of the old game
+post = ["2026-10-30T21:30:00Z", "2026-10-31T21:30:00Z"]         # first 24 h of the new game
+
+[comparisons]
+# Hero win rates in window `before` vs `after`.
+# patch: across the update. placebo: the same comparison 24 h earlier, entirely before the
+# update, so every "change" it finds is noise: the baseline for reading the patch result.
+patch = { before = "pre", after = "post" }
+placebo = { before = "placebo_pre", after = "pre" }

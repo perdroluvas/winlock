@@ -83,42 +83,6 @@ def adjust_pvalues(p, method: str) -> np.ndarray:
     return multipletests(np.asarray(p, dtype=float), method=method)[1]
 
 
-def coverage(rate, low, high) -> float:
-    """Share of rates that fall inside their interval [low, high]."""
-    rate, low, high = (np.asarray(x, dtype=float) for x in (rate, low, high))
-    return float(np.mean((low <= rate) & (rate <= high)))
-
-
-def expected_coverage(n_a, n_b, alpha: float = 0.05) -> np.ndarray:
-    """Chance that a second sample's rate lands inside the first sample's CI, if nothing changed.
-
-    p_b − p_a has SD sqrt(SE_a² + SE_b²), but the CI half-width is only z·SE_a, so
-    coverage ≈ 2Φ(z·SE_a / sqrt(SE_a² + SE_b²)) − 1. With p equal on both sides it cancels:
-    SE_a / sqrt(SE_a² + SE_b²) = sqrt((1/n_a) / (1/n_a + 1/n_b)).
-    """
-    z = norm.ppf(1 - alpha / 2)
-    inv_a, inv_b = 1 / np.asarray(n_a, dtype=float), 1 / np.asarray(n_b, dtype=float)
-    return 2 * norm.cdf(z * np.sqrt(inv_a / (inv_a + inv_b))) - 1
-
-
-def simulate_coverage(
-    p_true, n_a, n_b, alpha: float = 0.05, n_sims: int = 10_000, seed: int = 0
-) -> np.ndarray:
-    """Simulate a world where nothing changed and return the coverage of each simulation.
-
-    For every hero, draw a "train" and a "test" win count from the same true rate, build the
-    Wilson CI on train, and check whether the test rate lands inside it. The result has one
-    coverage value (share of heroes covered) per simulation.
-    """
-    rng = np.random.default_rng(seed)
-    p_true, n_a, n_b = (np.asarray(x) for x in (p_true, n_a, n_b))
-    wins_a = rng.binomial(n_a, p_true, size=(n_sims, len(p_true)))
-    wins_b = rng.binomial(n_b, p_true, size=(n_sims, len(p_true)))
-    low, high = wilson_ci(wins_a, n_a, alpha)
-    rate_b = wins_b / n_b
-    return ((low <= rate_b) & (rate_b <= high)).mean(axis=1)
-
-
 def evaluate_predictions(y, p, alpha: float = 0.05) -> dict[str, float]:
     """Score predicted probabilities p for binary outcomes y.
 
@@ -139,35 +103,6 @@ def evaluate_predictions(y, p, alpha: float = 0.05) -> dict[str, float]:
         "log_loss": log_loss(y, p),
         "brier": float(np.mean((p - y) ** 2)),
     }
-
-
-def pair_synergy(outcomes: pd.DataFrame, alpha: float = 0.05) -> pd.DataFrame:
-    """Per teammate pair: observed wins vs the wins the additive model expected.
-
-    Each match is its own coin with probability p_i (the additive prediction), so the expected
-    wins are Σp_i and their variance Σp_i(1−p_i) (a Poisson-binomial). Synergy is the excess:
-    excess = (wins − Σp_i) / n,   z = (wins − Σp_i) / sqrt(Σp_i(1−p_i)).
-    The Wilson CI is on the pair's observed win rate.
-    """
-    g = (
-        outcomes.assign(
-            won=outcomes["won"].astype(float), var=lambda d: d.expected * (1 - d.expected)
-        )
-        .groupby(["hero_a", "hero_b"], as_index=False)
-        .agg(
-            matches=("won", "size"),
-            wins=("won", "sum"),
-            expected=("expected", "sum"),
-            var=("var", "sum"),
-        )
-    )
-    g["win_rate"] = g["wins"] / g["matches"]
-    g["expected_rate"] = g["expected"] / g["matches"]
-    g["excess"] = g["win_rate"] - g["expected_rate"]
-    g["ci_low"], g["ci_high"] = wilson_ci(g["wins"], g["matches"], alpha)
-    g["z"] = (g["wins"] - g["expected"]) / np.sqrt(g["var"])
-    g["p"] = 2 * norm.sf(np.abs(g["z"]))
-    return g.drop(columns=["expected", "var"])
 
 
 def paired_loss_difference(y, p_a, p_b, alpha: float = 0.05) -> dict[str, float]:

@@ -1,4 +1,11 @@
-"""Filters that define the analysis population and the train/test split."""
+"""Filters that define the analysis population, and the named time windows inside it.
+
+The population is every complete match (12 players, 6 winners) of the configured modes that
+started inside the span of the `[windows]` in config. Each analysis then asks for one window by
+name (e.g. "pre" = the last 24 h before the update). Windows can overlap (the placebo's second
+half is the patch's first half), so they are selected by start_time instead of stored as a
+per-row label.
+"""
 
 from typing import Any
 
@@ -10,61 +17,61 @@ POPULATION_COLUMNS = ["match_id", "hero_id", "team", "won", "start_time"]
 
 # Row filters, applied cumulatively (in this order) by population_report.
 ROW_FILTERS = [
-    ("start_day", "CAST(start_time AS DATE) = CAST($start_day AS DATE)"),
+    (
+        "window",
+        "start_time >= CAST($start AS TIMESTAMPTZ) AND start_time < CAST($end AS TIMESTAMPTZ)",
+    ),
     ("game_mode", "game_mode = $game_mode"),
     ("match_mode", "list_contains($match_mode, match_mode)"),
     ("match_outcome", "match_outcome = $match_outcome"),
 ]
 
+Window = tuple[str, str]
+
+
+def window(cfg: dict[str, Any], name: str) -> Window:
+    """(start, end) of a named window, ISO UTC strings; the window is [start, end)."""
+    start, end = cfg["windows"][name]
+    return start, end
+
+
+def population_span(cfg: dict[str, Any]) -> Window:
+    """From the earliest window start to the latest window end."""
+    starts, ends = zip(*cfg["windows"].values(), strict=True)
+    return min(starts), max(ends)
+
 
 def _filter_params(cfg: dict[str, Any]) -> dict[str, Any]:
     pop = cfg["population"]
-    return {key: pop[key] for key, _ in ROW_FILTERS}
+    start, end = population_span(cfg)
+    return {"start": start, "end": end, **{key: pop[key] for key, _ in ROW_FILTERS[1:]}}
 
 
 def create_population(con: duckdb.DuckDBPyConnection, cfg: dict[str, Any]) -> None:
-    """Create the `population` table: filtered rows of complete matches, each tagged with its split.
+    """Create the `population` table: the rows of complete matches that pass the filters.
 
-    Steps: (1) row filters from the config, (2) keep only matches with exactly
-    `players_per_match` rows and `wins_per_match` winners, (3) rank matches by start_time and put
-    the first `train_fraction` of them in 'train', the rest in 'test'. The split is decided per
-    match, so all players of a match land on the same side.
+    Steps: (1) row filters from the config, minus rows flagged by `population.exclude_flags`;
+    (2) keep only matches with exactly `players_per_match` rows and `wins_per_match` winners, so
+    a match that lost a row to a flag is dropped whole.
     """
-    pop, split = cfg["population"], cfg["split"]
-    if split["method"] != "temporal":
-        raise ValueError(f"Unknown split method: {split['method']!r}")
+    pop = cfg["population"]
     where = " AND ".join(cond for _, cond in ROW_FILTERS)
+    flags = "".join(f" AND NOT {flag}" for flag in pop.get("exclude_flags", []))
     cols = ", ".join(f"f.{c}" for c in POPULATION_COLUMNS)
     con.execute(
         f"""
         CREATE OR REPLACE TABLE population AS
         WITH filtered AS (
-            SELECT * FROM match_player WHERE {where}
+            SELECT * FROM match_player WHERE {where}{flags}
         ),
         complete AS (
-            SELECT match_id, MIN(start_time) AS match_start
-            FROM filtered
+            SELECT match_id FROM filtered
             GROUP BY match_id
             HAVING COUNT(*) = $players AND SUM(CAST(won AS INT)) = $wins
-        ),
-        ranked AS (
-            SELECT match_id,
-                   ROW_NUMBER() OVER (ORDER BY match_start, match_id) AS rank,
-                   COUNT(*) OVER () AS n_matches
-            FROM complete
         )
-        SELECT {cols},
-               CASE WHEN r.rank <= $train_fraction * r.n_matches
-                    THEN 'train' ELSE 'test' END AS split
-        FROM filtered f
-        JOIN ranked r USING (match_id)
+        SELECT {cols} FROM filtered f JOIN complete USING (match_id)
         """,
-        {
-            **_filter_params(cfg),
-            "players": pop["players_per_match"],
-            "wins": pop["wins_per_match"],
-            "train_fraction": split["train_fraction"],
-        },
+        {**_filter_params(cfg), "players": pop["players_per_match"], "wins": pop["wins_per_match"]},
     )
 
 
@@ -72,15 +79,17 @@ def population_report(con: duckdb.DuckDBPyConnection, cfg: dict[str, Any]) -> pd
     """Rows and matches left after each filter step (requires `create_population` first)."""
     steps = [("file", "SELECT COUNT(*), COUNT(DISTINCT match_id) FROM match_player", {})]
     params = _filter_params(cfg)
+    names = {"window": ["start", "end"]}
     conds: list[str] = []
+    used: dict[str, Any] = {}
     for key, cond in ROW_FILTERS:
         conds.append(cond)
-        used = {k: params[k] for k, _ in ROW_FILTERS[: len(conds)]}
+        used |= {k: params[k] for k in names.get(key, [key])}
         query = (
             "SELECT COUNT(*), COUNT(DISTINCT match_id) FROM match_player "
             f"WHERE {' AND '.join(conds)}"
         )
-        steps.append((key, query, used))
+        steps.append((key, query, dict(used)))
     steps.append(
         ("complete_match", "SELECT COUNT(*), COUNT(DISTINCT match_id) FROM population", {})
     )
@@ -94,48 +103,34 @@ def population_report(con: duckdb.DuckDBPyConnection, cfg: dict[str, Any]) -> pd
     return report
 
 
-def split_summary(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
-    """Matches and rows per split. Sizes only (no outcomes), so it is safe for the test side."""
-    return con.sql(
-        """
-        SELECT split, COUNT(DISTINCT match_id) AS matches, COUNT(*) AS rows,
-               MIN(start_time) AS first_start, MAX(start_time) AS last_start
-        FROM population
-        GROUP BY split
-        ORDER BY first_start
-        """
-    ).df()
+def in_window(win: Window) -> str:
+    start, end = win
+    return f"start_time >= TIMESTAMPTZ '{start}' AND start_time < TIMESTAMPTZ '{end}'"
 
 
-def hero_winrates(con: duckdb.DuckDBPyConnection, split: str) -> pd.DataFrame:
-    """Games and wins per hero on one side of the split."""
+def window_sizes(con: duckdb.DuckDBPyConnection, cfg: dict[str, Any]) -> pd.DataFrame:
+    """Matches per named window. Sizes only (no outcomes), safe to look at first."""
+    rows = []
+    for name in cfg["windows"]:
+        [(n, first, last)] = con.execute(
+            "SELECT COUNT(DISTINCT match_id), strftime(MIN(start_time), '%m-%d %H:%M'), "
+            "strftime(MAX(start_time), '%m-%d %H:%M') FROM population "
+            f"WHERE {in_window(window(cfg, name))}"
+        ).fetchall()
+        rows.append({"window": name, "matches": n, "first_start": first, "last_start": last})
+    return pd.DataFrame(rows)
+
+
+def hero_winrates(con: duckdb.DuckDBPyConnection, win: Window) -> pd.DataFrame:
+    """Games and wins per hero for matches started in the window."""
     return con.execute(
-        """
+        f"""
         SELECT hero_id, COUNT(*) AS games, SUM(CAST(won AS INT)) AS wins
         FROM population
-        WHERE split = $split
+        WHERE {in_window(win)}
         GROUP BY hero_id
         ORDER BY hero_id
-        """,
-        {"split": split},
-    ).df()
-
-
-def hero_winrates_by_parity(con: duckdb.DuckDBPyConnection, parity: int) -> pd.DataFrame:
-    """Games and wins per hero over the whole population, for matches with match_id % 2 = parity.
-
-    Split-half control: even and odd match_ids cover the same hours, so any difference between
-    the halves is chance alone (no time effect).
-    """
-    return con.execute(
         """
-        SELECT hero_id, COUNT(*) AS games, SUM(CAST(won AS INT)) AS wins
-        FROM population
-        WHERE match_id % 2 = $parity
-        GROUP BY hero_id
-        ORDER BY hero_id
-        """,
-        {"parity": parity},
     ).df()
 
 

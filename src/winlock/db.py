@@ -7,8 +7,8 @@ from winlock.config import load_config, resolve_path
 
 
 def connect() -> duckdb.DuckDBPyConnection:
-    """
-    Open an in-memory DuckDB connection with a `match_player` view over the parquet.
+    """Open an in-memory DuckDB connection with a `match_player` view over the extracted
+    patch-window parquet (`[data] match_player`).
     """
     cfg = load_config()
     path = resolve_path(cfg["data"]["match_player"])

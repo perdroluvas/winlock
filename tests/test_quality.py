@@ -1,4 +1,4 @@
-from winlock.quality import match_completeness, start_day_profile, start_hour_profile
+from winlock.quality import match_completeness, start_day_profile, starts_per_bin
 
 
 def test_start_day_profile_groups_old_days(ten_match_con):
@@ -7,13 +7,16 @@ def test_start_day_profile_groups_old_days(ten_match_con):
     assert prof["pct_rows"].sum() == 100
 
 
-def test_start_hour_profile_counts_matches(ten_match_con):
-    prof = start_hour_profile(ten_match_con, "2026-10-20")
-    # all modes on that day: 10 complete + 1 incomplete Normal + 1 StreetBrawl
-    assert prof["matches"].sum() == 12
-    assert prof.loc[prof.hour_utc == 0, "matches"].item() == 3
+def test_starts_per_bin_counts_one_mode(ten_match_con):
+    bins = starts_per_bin(
+        ten_match_con, "2026-10-20T00:00:00Z", "2026-10-20T03:00:00Z", "Normal", 60
+    )
+    # 00:00 holds match 1 plus the incomplete Normal match 100 (StreetBrawl is another mode)
+    assert bins["matches"].tolist() == [2, 1, 1]
 
 
 def test_match_completeness_finds_the_short_match(ten_match_con):
-    comp = match_completeness(ten_match_con, "2026-10-20", "Normal")
+    comp = match_completeness(
+        ten_match_con, "2026-10-20T00:00:00Z", "2026-10-21T00:00:00Z", "Normal"
+    )
     assert dict(zip(comp["rows"], comp["matches"], strict=True)) == {12: 10, 10: 1}

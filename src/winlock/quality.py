@@ -36,24 +36,34 @@ def start_day_profile(con: duckdb.DuckDBPyConnection, recent_days: int = 3) -> p
     ).df()
 
 
-def start_hour_profile(con: duckdb.DuckDBPyConnection, day: str) -> pd.DataFrame:
-    """Rows and matches per UTC start hour on one day (format 'YYYY-MM-DD')."""
-    return con.sql(
+def starts_per_bin(
+    con: duckdb.DuckDBPyConnection, start: str, end: str, game_mode: str, minutes: int
+) -> pd.DataFrame:
+    """Matches of one mode started per `minutes`-long bin in [start, end) (UTC, ISO strings).
+
+    Around an update, servers restart and players wait, so starts dip: that dip is how the
+    update shows up in the data (`game_mode_version` does not change).
+    """
+    return con.execute(
         """
-        SELECT HOUR(start_time) AS hour_utc,
-               COUNT(*) AS rows,
+        SELECT time_bucket(INTERVAL (CAST($minutes AS INTEGER)) MINUTE, start_time) AS bin_start,
                COUNT(DISTINCT match_id) AS matches
         FROM match_player
-        WHERE CAST(start_time AS DATE) = CAST($day AS DATE)
+        WHERE start_time >= CAST($start AS TIMESTAMPTZ)
+          AND start_time < CAST($end AS TIMESTAMPTZ)
+          AND game_mode = $game_mode
         GROUP BY 1
         ORDER BY 1
         """,
-        params={"day": day},
+        {"start": start, "end": end, "game_mode": game_mode, "minutes": minutes},
     ).df()
 
 
-def match_completeness(con: duckdb.DuckDBPyConnection, day: str, game_mode: str) -> pd.DataFrame:
-    """How many matches have each number of rows, and their average number of winners.
+def match_completeness(
+    con: duckdb.DuckDBPyConnection, start: str, end: str, game_mode: str
+) -> pd.DataFrame:
+    """Matches started in [start, end): how many have each number of rows, and their average
+    number of winners.
 
     A complete match has 12 rows and 6 winners; anything else is missing players.
     """
@@ -62,7 +72,8 @@ def match_completeness(con: duckdb.DuckDBPyConnection, day: str, game_mode: str)
         WITH matches AS (
             SELECT match_id, COUNT(*) AS rows, SUM(CAST(won AS INT)) AS winners
             FROM match_player
-            WHERE CAST(start_time AS DATE) = CAST($day AS DATE) AND game_mode = $game_mode
+            WHERE start_time >= CAST($start AS TIMESTAMPTZ)
+              AND start_time < CAST($end AS TIMESTAMPTZ) AND game_mode = $game_mode
             GROUP BY match_id
         )
         SELECT rows, COUNT(*) AS matches, ROUND(AVG(winners), 2) AS avg_winners,
@@ -71,5 +82,5 @@ def match_completeness(con: duckdb.DuckDBPyConnection, day: str, game_mode: str)
         GROUP BY rows
         ORDER BY rows DESC
         """,
-        params={"day": day, "game_mode": game_mode},
+        params={"start": start, "end": end, "game_mode": game_mode},
     ).df()

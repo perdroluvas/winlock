@@ -39,10 +39,8 @@ def check(path):
     assert path.exists() and path.stat().st_size > 1000
 
 
-def test_baseline_charts(heroes, tmp_path):
+def test_winrate_chart(heroes, tmp_path):
     check(figures.winrate_ci_chart(heroes, tmp_path / "a.png", "t"))
-    check(figures.games_per_hero_chart(heroes, tmp_path / "b.png", "t"))
-    check(figures.ci_width_vs_games_chart(heroes, tmp_path / "c.png", "t"))
 
 
 def test_winrate_chart_with_portraits(heroes, tmp_path):
@@ -52,13 +50,9 @@ def test_winrate_chart_with_portraits(heroes, tmp_path):
     check(figures.winrate_ci_chart(heroes, tmp_path / "p.png", "t", portraits_dir=tmp_path))
 
 
-def test_evaluation_charts(ev, tmp_path):
-    check(figures.train_vs_test_chart(ev, tmp_path / "a.png", "t"))
-    zs = {"a": pd.Series([0.1, -0.5, 1.2]), "b": pd.Series([0.3, 0.0, -1.0])}
-    check(figures.z_distribution_chart(zs, tmp_path / "b.png", "t"))
-    check(
-        figures.coverage_simulation_chart(np.array([0.6, 0.7, 0.75]), 0.8, tmp_path / "c.png", "t")
-    )
+def test_before_after_chart(ev, tmp_path):
+    changes = ev.rename(columns={"rate_train": "rate_before", "rate_test": "rate_after"})
+    check(figures.before_after_chart(changes, tmp_path / "a.png", "t"))
 
 
 def test_model_charts(ev, tmp_path):
@@ -79,18 +73,15 @@ def test_model_charts(ev, tmp_path):
     check(figures.coefficients_chart(coef, tmp_path / "c.png", "t", n_outliers=1))
 
 
-def test_synergy_charts(tmp_path):
-    pairs = pd.DataFrame(
-        {
-            "pair": ["A + B", "A + C", "B + C"],
-            "matches": [100, 800, 3000],
-            "excess": [0.05, -0.02, 0.01],
-            "p": [0.01, 0.4, 0.7],
-            "p_holm": [0.03, 0.8, 0.8],
-            "z_train": [2.5, -0.8, 0.4],
-            "z_test": [1.0, -0.2, 0.1],
-        }
+def test_patch_dip_chart(tmp_path):
+    bins = pd.date_range("2026-10-30 20:00", periods=6, freq="10min", tz="UTC")
+    starts = pd.DataFrame({"bin_start": bins, "matches": [2000, 1700, 900, 200, 800, 1500]})
+    check(
+        figures.patch_dip_chart(
+            starts,
+            tmp_path / "a.png",
+            "t",
+            update_at=pd.Timestamp("2026-10-30T20:51:49Z"),
+            buffer=(bins[3], bins[5]),
+        )
     )
-    check(figures.pair_matches_chart(pairs, tmp_path / "a.png", "t"))
-    check(figures.synergy_volcano_chart(pairs, tmp_path / "b.png", "t", n_labels=2))
-    check(figures.synergy_replication_chart(pairs, tmp_path / "c.png", "t"))

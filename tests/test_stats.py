@@ -8,15 +8,11 @@ from winlock.stats import (
     add_wilson,
     adjust_pvalues,
     binomial_vs_half,
-    coverage,
     diff_z,
     evaluate_predictions,
-    expected_coverage,
     log_loss,
     match_log_losses,
-    pair_synergy,
     paired_loss_difference,
-    simulate_coverage,
     wilson_ci,
 )
 
@@ -70,44 +66,11 @@ def test_holm_is_stricter_than_bh():
     assert np.all(holm >= bh) and np.all(bh >= p)
 
 
-def test_coverage_counts_inside_interval():
-    assert coverage([0.5, 0.7, 0.2], [0.4, 0.4, 0.4], [0.6, 0.6, 0.6]) == pytest.approx(1 / 3)
-
-
-def test_expected_coverage_equal_samples():
-    # n_a = n_b: ratio sqrt(1/2), so 2Φ(1.96/√2) − 1 ≈ 0.834
-    assert expected_coverage(1000, 1000) == pytest.approx(0.834, abs=1e-3)
-
-
-def test_simulation_is_reproducible_and_matches_formula():
-    args = (np.full(40, 0.5), np.full(40, 7000), np.full(40, 3000))
-    sims = simulate_coverage(*args, n_sims=4000, seed=1)
-    assert np.array_equal(sims, simulate_coverage(*args, n_sims=4000, seed=1))
-    assert sims.mean() == pytest.approx(expected_coverage(7000, 3000), abs=0.01)
-
-
 def test_evaluate_predictions_small_case():
     m = evaluate_predictions([1, 0, 1, 0], [0.9, 0.2, 0.4, 0.5])
     assert m["correct"] == 3  # 0.4 calls Team1 (wrong); 0.5 calls Team1 (right)
     assert m["brier"] == pytest.approx((0.01 + 0.04 + 0.36 + 0.25) / 4)
     assert evaluate_predictions([1, 0], [0.5, 0.5])["log_loss"] == pytest.approx(np.log(2))
-
-
-def test_pair_synergy_by_hand():
-    # One pair, 4 matches, each expected at 0.5; it won 3. Excess = 0.75 - 0.5 = 0.25,
-    # z = (3 - 2) / sqrt(4 * 0.25) = 1.
-    outcomes = pd.DataFrame(
-        {
-            "hero_a": [1] * 4,
-            "hero_b": [2] * 4,
-            "won": [True, True, True, False],
-            "expected": [0.5] * 4,
-        }
-    )
-    row = pair_synergy(outcomes).iloc[0]
-    assert row["matches"] == 4 and row["wins"] == 3
-    assert row["excess"] == pytest.approx(0.25)
-    assert row["z"] == pytest.approx(1.0)
 
 
 def test_paired_loss_difference_identical_models_is_zero_and_better_is_negative():

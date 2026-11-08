@@ -6,36 +6,34 @@ guess on test; if they are noise, they don't.
 """
 
 from dataclasses import dataclass
-from itertools import combinations
 from typing import Any
 
 import duckdb
 import numpy as np
 import pandas as pd
-from scipy import sparse
 from scipy.special import expit, logit
 from sklearn.linear_model import LogisticRegression
 
-from winlock.stats import log_loss
+from winlock.population import Window, in_window
+from winlock.stats import evaluate_predictions, log_loss, paired_loss_difference
 
 SIDE_ONLY = "No heroes (side only)"
 
 
-def match_table(con: duckdb.DuckDBPyConnection, split: str) -> pd.DataFrame:
-    """One row per match of a split: start time, hero lists per team and whether Team0 won."""
+def match_table(con: duckdb.DuckDBPyConnection, win: Window) -> pd.DataFrame:
+    """One row per match started in the window: start time, hero lists per team, Team0 won."""
     return con.execute(
-        """
+        f"""
         SELECT match_id,
                MIN(start_time) AS start_time,
                LIST(hero_id) FILTER (WHERE team = 'Team0') AS team0_heroes,
                LIST(hero_id) FILTER (WHERE team = 'Team1') AS team1_heroes,
                BOOL_OR(won AND team = 'Team0') AS team0_won
         FROM population
-        WHERE split = $split
+        WHERE {in_window(win)}
         GROUP BY match_id
         ORDER BY start_time, match_id
-        """,
-        {"split": split},
+        """
     ).df()
 
 
@@ -80,7 +78,7 @@ def fit_logistic(
     Returns the final model and the validation log loss of each C.
     """
     seed = cfg["stats"]["seed"]
-    fit, val = np.flatnonzero(fit), np.flatnonzero(val)  # row indices work for dense and sparse
+    fit, val = np.flatnonzero(fit), np.flatnonzero(val)  # boolean masks -> row indices
     scores = []
     for C in cfg["model"]["C_grid"]:
         m = LogisticRegression(C=C, max_iter=1000, random_state=seed).fit(X[fit], y[fit])
@@ -91,54 +89,9 @@ def fit_logistic(
     return final, scores
 
 
-def hero_pairs(hero_ids: list[int]) -> list[tuple[int, int]]:
-    """All unordered teammate pairs (a, b) with a < b: 44 heroes give 44·43/2 = 946 pairs."""
-    return list(combinations(sorted(hero_ids), 2))
-
-
-def pair_matrix(matches: pd.DataFrame, hero_ids: list[int]) -> sparse.csr_matrix:
-    """Pair features: column k is +1 if pair k played together on Team0, −1 on Team1, else 0.
-
-    Each team of 6 holds 15 pairs, so every row has 30 non-zero entries out of 946: a sparse
-    matrix stores only those.
-    """
-    col = {pair: k for k, pair in enumerate(hero_pairs(hero_ids))}
-    rows, cols, vals = [], [], []
-    for i, (team0, team1) in enumerate(
-        zip(matches["team0_heroes"], matches["team1_heroes"], strict=True)
-    ):
-        for team, sign in ((team0, 1.0), (team1, -1.0)):
-            for pair in combinations(sorted(team), 2):
-                rows.append(i)
-                cols.append(col[pair])
-                vals.append(sign)
-    return sparse.csr_matrix((vals, (rows, cols)), shape=(len(matches), len(col)))
-
-
-def team_pair_outcomes(matches: pd.DataFrame, p_team0: np.ndarray) -> pd.DataFrame:
-    """One row per (match, team, teammate pair): did the team win, and what did the additive
-    model expect (`p_team0` for Team0, 1 − p_team0 for Team1)?
-    """
-    hero_a, hero_b, won, expected = [], [], [], []
-    for team0, team1, team0_won, p0 in zip(
-        matches["team0_heroes"],
-        matches["team1_heroes"],
-        matches["team0_won"],
-        p_team0,
-        strict=True,
-    ):
-        for team, team_won, p in ((team0, team0_won, p0), (team1, not team0_won, 1 - p0)):
-            for a, b in combinations(sorted(team), 2):
-                hero_a.append(a)
-                hero_b.append(b)
-                won.append(team_won)
-                expected.append(p)
-    return pd.DataFrame({"hero_a": hero_a, "hero_b": hero_b, "won": won, "expected": expected})
-
-
 @dataclass
 class MatchData:
-    """Train and test matches with their hero features and targets (Team0 won = 1)."""
+    """Train (fit) and test matches with their hero features and targets (Team0 won = 1)."""
 
     hero_ids: list[int]
     train: pd.DataFrame
@@ -149,9 +102,15 @@ class MatchData:
     y_test: np.ndarray
 
 
-def load_match_data(con: duckdb.DuckDBPyConnection, hero_ids: list[int]) -> MatchData:
-    """Build the match tables, hero matrices and targets for both splits."""
-    train, test = match_table(con, "train"), match_table(con, "test")
+def load_match_data(
+    con: duckdb.DuckDBPyConnection, hero_ids: list[int], fit_window: Window, test_window: Window
+) -> MatchData:
+    """Build the match tables, hero matrices and targets: fit on one window, test on another."""
+    return match_data(hero_ids, match_table(con, fit_window), match_table(con, test_window))
+
+
+def match_data(hero_ids: list[int], train: pd.DataFrame, test: pd.DataFrame) -> MatchData:
+    """MatchData from two match tables (see match_table)."""
     return MatchData(
         hero_ids=hero_ids,
         train=train,
@@ -180,9 +139,53 @@ def fit_baselines(
     """
     fit, val = temporal_holdout(data.train, cfg["model"]["validation_fraction"])
     logreg, val_scores = fit_logistic(data.X_train, data.y_train, fit, val, cfg)
-    preds = {
-        SIDE_ONLY: np.full(len(data.y_test), data.y_train.mean()),
-        "Win-rate model": winrate_model(data.X_test, rates),
-        "Logistic regression": logreg.predict_proba(data.X_test)[:, 1],
-    }
+    preds = predict_baselines(data.X_test, data.y_train.mean(), rates, logreg)
     return preds, logreg, val_scores
+
+
+def predict_baselines(
+    X_test: np.ndarray, team0_share: float, rates: np.ndarray, logreg: LogisticRegression
+) -> dict[str, np.ndarray]:
+    """Predictions of the three fitted models for any hero matrix (e.g. another test window)."""
+    return {
+        SIDE_ONLY: np.full(len(X_test), team0_share),
+        "Win-rate model": winrate_model(X_test, rates),
+        "Logistic regression": logreg.predict_proba(X_test)[:, 1],
+    }
+
+
+def retrain_check(
+    post: MatchData, old_model: LogisticRegression, cfg: dict[str, Any]
+) -> dict[str, Any]:
+    """After the update: does a model refit on new-game matches beat the old one?
+
+    `post.test` is the post-patch window. Its first `post_fit_fraction` (in time) refits a
+    logistic regression (C chosen again on the last part of that slice); both models then
+    predict **the same** remaining matches, so the comparison is paired match by match.
+    Returns the metrics of both models and the paired log-loss difference (new − old; negative =
+    retraining helps).
+    """
+    alpha = cfg["stats"]["alpha"]
+    n_fit = round(len(post.test) * cfg["model"]["post_fit_fraction"])
+    fit_rows, eval_rows = np.arange(n_fit), np.arange(n_fit, len(post.test))
+    X_fit, y_fit = post.X_test[fit_rows], post.y_test[fit_rows]
+    X_eval, y_eval = post.X_test[eval_rows], post.y_test[eval_rows]
+    fit, val = temporal_holdout(post.test.iloc[fit_rows], cfg["model"]["validation_fraction"])
+    new_model, val_scores = fit_logistic(X_fit, y_fit, fit, val, cfg)
+    p_old = old_model.predict_proba(X_eval)[:, 1]
+    p_new = new_model.predict_proba(X_eval)[:, 1]
+    metrics = pd.DataFrame(
+        [
+            {"model": "Trained before the update", **evaluate_predictions(y_eval, p_old, alpha)},
+            {"model": "Retrained after the update", **evaluate_predictions(y_eval, p_new, alpha)},
+        ]
+    )
+    return {
+        "metrics": metrics,
+        "loss_diff": paired_loss_difference(y_eval, p_old, p_new, alpha),
+        "val_scores": val_scores,
+        "model": new_model,
+        "n_fit": n_fit,
+        "n_eval": len(eval_rows),
+        "eval_start": post.test["start_time"].iloc[n_fit],
+    }
