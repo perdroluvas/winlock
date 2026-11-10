@@ -1,18 +1,9 @@
-"""Terminal reader for the match_player parquet.
-
-Usage:
-    uv run db-reader schema [--like PATTERN]
-    uv run db-reader head [-n N] [--cols COL1,COL2,...]
-    uv run db-reader sql "SELECT ... FROM match_player" [--max-rows N]
-"""
-
 import argparse
 
 import duckdb
 
 from winlock.db import connect
 
-# Never shown in the terminal: account_id identifies real players.
 PRIVATE_COLUMNS = {"account_id"}
 DEFAULT_HEAD_COLUMNS = [
     "match_id",
@@ -28,7 +19,6 @@ DEFAULT_HEAD_COLUMNS = [
 
 
 def drop_private(rel: duckdb.DuckDBPyRelation) -> duckdb.DuckDBPyRelation:
-    """Remove private columns from a query result before it is printed."""
     keep = [c for c in rel.columns if c not in PRIVATE_COLUMNS]
     if len(keep) < len(rel.columns):
         print(f"(hidden: {', '.join(sorted(PRIVATE_COLUMNS & set(rel.columns)))})")

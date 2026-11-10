@@ -1,20 +1,4 @@
-"""Extract a time window of match_player from the public deadlock-api data dumps.
-
-`winlock extract` reads the current manifest, keeps the files that can hold matches started in
-the window, and lets DuckDB read over HTTPS only the configured columns and only the row groups
-whose start_time can fall in the window. Nothing is downloaded whole.
-
-Base files are partitioned by intDiv(match_id, 1e6) and match_ids grow with time, so each
-partition covers a stretch of time; a binary search over the partitions' start times (one footer
-read per probe) finds the few partitions the window needs. Residuals and deltas list the
-partitions they hold (`rows_by_partition`), so only those with rows of the kept partitions stay.
-
-Two steps, so the network is used once:
-1. remote → local `raw.parquet`: projected and filtered, but not deduplicated;
-2. local → `match_player.parquet`: one row per (match_id, player_slot), the newest by created_at
-   (the same row can sit in a base file and again in a delta or residual).
-Each run goes to its own folder with a `meta.json`, so runs can be compared (late arrivals).
-"""
+"""`winlock extract`: read a time window of match_player from the public data dumps."""
 
 import json
 import math
@@ -37,20 +21,16 @@ def fetch_manifest(url: str, timeout: float = 30) -> dict[str, Any]:
 
 
 def parse_utc(text: str) -> datetime:
-    """'2026-10-28T00:00:00Z' -> aware UTC datetime."""
     return datetime.fromisoformat(text.replace("Z", "+00:00")).astimezone(UTC)
 
 
 def current_files(manifest: dict[str, Any], table: str) -> list[dict[str, Any]]:
-    """Files of the table's current generation (a rebuild in progress is ignored, as the manifest
-    instructs)."""
     t = manifest["tables"][table]
     gen = t.get("generation")
     return [f for f in t["files"] if f.get("generation", gen) == gen]
 
 
 def base_partitions(files: list[dict[str, Any]]) -> dict[int, list[dict[str, Any]]]:
-    """Base files grouped by partition, partitions in ascending order, files sorted by key."""
     parts: dict[int, list[dict[str, Any]]] = {}
     for f in files:
         if f["kind"] == "base":
@@ -61,13 +41,7 @@ def base_partitions(files: list[dict[str, Any]]) -> dict[int, list[dict[str, Any
 def partitions_for_window(
     partitions: list[int], start_of: Callable[[int], datetime], start: datetime, end: datetime
 ) -> list[int]:
-    """Partitions that can hold matches started in [start, end).
-
-    Partition p holds matches started from start_of(p) up to the next partition's start, and
-    those starts are sorted (match_ids grow with time). So the window needs the last partition
-    starting at or before `start`, up to (not including) the first one starting at or after
-    `end`. Binary search: start_of is only called for the ~2·log2(n) probed partitions.
-    """
+    """Binary search: match_ids grow with time, so partitions are sorted by start."""
     lo = max(bisect_right(partitions, start, key=start_of) - 1, 0)
     hi = bisect_left(partitions, end, key=start_of)
     return partitions[lo:hi]
@@ -76,11 +50,6 @@ def partitions_for_window(
 def select_files(
     files: list[dict[str, Any]], keep: list[int], start: datetime
 ) -> list[dict[str, Any]]:
-    """Base files of the kept partitions, plus residuals/deltas holding rows of those partitions.
-
-    A residual/delta whose created_at upper bound `hi` is before `start` can't hold matches of
-    the window (a row is created after its match started), so it is skipped too.
-    """
     wanted = {str(p) for p in keep}
     cutoff = start.timestamp()
     out = []
@@ -96,7 +65,6 @@ def select_files(
 
 
 def footer_min_start(con: duckdb.DuckDBPyConnection, url: str) -> datetime:
-    """Earliest start_time in a parquet file, from its footer statistics only (no data read)."""
     text = con.execute(
         f"""
         SELECT MIN(stats_min_value) FROM parquet_metadata('{url}')
@@ -107,11 +75,6 @@ def footer_min_start(con: duckdb.DuckDBPyConnection, url: str) -> datetime:
 
 
 def ingestion_gap_hours(manifest: dict[str, Any], table: str, end: datetime) -> float:
-    """Hours between the table's watermark (newest created_at ingested) and the window end.
-
-    Positive = the end of the window is not even ingested yet. Zero or negative still does not
-    mean complete: matches finish ~35 min after they start and some rows arrive days later.
-    """
     return (end.timestamp() - manifest["tables"][table]["watermark_hi"]) / 3600
 
 
@@ -127,10 +90,6 @@ def read_window(
     end: datetime,
     out_path: Path,
 ) -> int:
-    """Step 1: copy the window's rows (selected columns only) from `sources` to `out_path`.
-
-    `sources` can be HTTPS URLs or local paths. Returns the number of rows written.
-    """
     cols = ", ".join(f'"{c}"' for c in columns)
     con.execute(
         f"""
@@ -146,15 +105,7 @@ def read_window(
 
 
 def deduplicate(con: duckdb.DuckDBPyConnection, raw_path: Path, out_path: Path) -> int:
-    """Step 2: keep one row per (match_id, player_slot), the newest by created_at.
-
-    player_slot rather than account_id: anonymous players share account_id 0, so deduplicating
-    on it would merge different players of the same match.
-
-    A row can be re-sent later (the match was reprocessed) with a newer created_at, so the kept
-    created_at says when the row was last *updated*. `first_created_at`, the earliest
-    created_at over all copies, says when it first *arrived*: that one measures late arrivals.
-    """
+    """One row per (match_id, player_slot): anonymous players all have account_id 0."""
     con.execute(
         f"""
         COPY (
@@ -172,7 +123,6 @@ def deduplicate(con: duckdb.DuckDBPyConnection, raw_path: Path, out_path: Path) 
 
 
 def summarize(con: duckdb.DuckDBPyConnection, path: Path) -> dict[str, Any]:
-    """Row/match counts and time ranges (UTC, as text) of an extracted file (no player data)."""
     fmt = "'%Y-%m-%dT%H:%M:%SZ'"
     r = con.execute(
         f"""
@@ -187,10 +137,6 @@ def summarize(con: duckdb.DuckDBPyConnection, path: Path) -> dict[str, Any]:
 
 
 def run_extract(cfg: dict[str, Any], out_root: Path, dry_run: bool = False) -> dict[str, Any]:
-    """Fetch the manifest, select files and (unless dry_run) extract the window to a new folder.
-
-    Returns the run's metadata (also written to `meta.json` next to the data).
-    """
     ex = cfg["extract"]
     start, end = parse_utc(ex["window_start"]), parse_utc(ex["window_end"])
     manifest = fetch_manifest(ex["manifest_url"])

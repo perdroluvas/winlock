@@ -1,13 +1,4 @@
-"""Pipeline entry point: each command loads data, calls the analysis modules, prints and saves.
-
-One command per part of the article (windows in `[windows]` of config/analysis.toml):
-    uv run winlock extract      # read the window from the public data dumps (network)
-    uv run winlock quality      # population, window sizes, the dip in match starts at the update
-    uv run winlock figures      # Wilson CI per hero, 24 h before and 24 h after the update
-    uv run winlock patch        # how did win rates change across the update? (+ placebo)
-    uv run winlock model        # logistic regression: before vs after the update, retraining
-    uv run winlock portraits    # download hero portraits once for the win-rate chart (network)
-"""
+"""Entry point: `uv run winlock <command>`. Loads, calls, prints, saves (no analysis logic)."""
 
 import argparse
 from pathlib import Path
@@ -33,8 +24,6 @@ BEFORE_AFTER = ("before", "after")
 
 
 class Run:
-    """Shared setup: config, connection with the population table, output folders."""
-
     def __init__(self) -> None:
         self.cfg: dict[str, Any] = load_config()
         self.con = connect()
@@ -53,12 +42,10 @@ class Run:
         return window(self.cfg, name)
 
     def label(self, name: str) -> str:
-        """'pre (10-29 20:30 – 10-30 20:30 UTC)'."""
         start, end = (t[5:16].replace("T", " ") for t in self.win(name))
         return f"{name} ({start} – {end} UTC)"
 
     def named(self, rates: pd.DataFrame) -> pd.DataFrame:
-        """Add Wilson CIs and hero names to a games/wins table."""
         return add_hero_names(add_wilson(rates, self.alpha), self.heroes)
 
     def winrates(self, name: str) -> pd.DataFrame:
@@ -92,13 +79,11 @@ def print_change(s: dict[str, Any], label: str) -> None:
 
 
 def compare(run: Run, before: str, after: str) -> pd.DataFrame:
-    """Per-hero before/after comparison of two named windows."""
     a, b = (run.winrates(n) for n in (before, after))
     return evaluation.compare_samples(a, b, BEFORE_AFTER)
 
 
 def by_abs(df: pd.DataFrame, col: str) -> pd.DataFrame:
-    """Rows sorted by |col|, largest first."""
     return df.reindex(df[col].abs().sort_values(ascending=False).index)
 
 

@@ -1,5 +1,3 @@
-"""DuckDB access to the match_player parquet."""
-
 import duckdb
 import pandas as pd
 
@@ -7,9 +5,6 @@ from winlock.config import load_config, resolve_path
 
 
 def connect() -> duckdb.DuckDBPyConnection:
-    """Open an in-memory DuckDB connection with a `match_player` view over the extracted
-    patch-window parquet (`[data] match_player`).
-    """
     cfg = load_config()
     path = resolve_path(cfg["data"]["match_player"])
     con = duckdb.connect()
@@ -20,6 +15,5 @@ def connect() -> duckdb.DuckDBPyConnection:
 
 
 def load_heroes() -> pd.DataFrame:
-    """Hero names and release dates from the small reference CSV (hero_id, name, release_date)."""
     cfg = load_config()
     return pd.read_csv(resolve_path(cfg["data"]["heroes"]), parse_dates=["release_date"])

@@ -1,16 +1,3 @@
-"""Chart themes: one palette + matplotlib style per look, chosen in config ([figures] theme).
-
-figures.py never hard-codes colors: it asks `active()` for the current Theme. The CLI calls
-`use(name)` once with the configured name. Two looks:
-
-- "clean": light, one blue accent (the original reference style).
-- "deadlock": dark smoke, cream text, brass art-deco trim, and the game's own team colors
-  (Amber = team1_color, Sapphire = team2_color, from the deadlock-api /v1/assets/colors list).
-
-Fonts are open-license (OFL) look-alikes bundled in assets/fonts/; the game's own fonts
-(Radiance, Reaver) are commercial and can't be redistributed.
-"""
-
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -26,24 +13,23 @@ FONTS_DIR = Path(__file__).parent / "assets" / "fonts"
 @dataclass(frozen=True)
 class Theme:
     name: str
-    surface: str  # background
-    text: str  # titles, the 50% line
-    text_secondary: str  # labels, ticks, annotations
+    surface: str
+    text: str
+    text_secondary: str
     grid: str
-    accent: str  # the single-series color
-    accent_2: str  # second series
-    high: str  # "differs from 50%, above"
-    low: str  # "differs from 50%, below"
-    neutral: str  # "can't tell from 50%"
-    trim: str | None = None  # art-deco frame color; None = no frame
-    title_font: str | None = None  # None = same as body text
+    accent: str
+    accent_2: str
+    high: str
+    low: str
+    neutral: str
+    trim: str | None = None
+    title_font: str | None = None
     uppercase_titles: bool = False
-    row_height: float = 0.22  # inches per hero row in the per-hero charts
+    row_height: float = 0.22
     rc: dict = field(default_factory=dict)
 
 
 def _rc(t_surface, t_text, t_secondary, t_grid, extra=None) -> dict:
-    """The matplotlib settings every theme shares, filled with that theme's colors."""
     rc = {
         "figure.facecolor": t_surface,
         "axes.facecolor": t_surface,
@@ -83,8 +69,6 @@ CLEAN = Theme(
     rc=_rc("#fcfcfb", "#0b0b0b", "#52514e", "#e4e3de"),
 )
 
-# Deadlock: in-game base_text #ffefd7, golden_light #c6a269, golden_dark #92703c,
-# team1_color (Amber) #d4860b, team2_color (Sapphire) #4d75c3. Smoke tones are ours.
 _SMOKE, _CREAM, _BRASS_LIGHT, _BRASS_DARK = "#15120f", "#ffefd7", "#c6a269", "#92703c"
 DEADLOCK = Theme(
     name="deadlock",
@@ -95,29 +79,26 @@ DEADLOCK = Theme(
     accent="#d4860b",
     accent_2="#4d75c3",
     high="#d4860b",
-    low="#6f93dc",  # Sapphire lifted a step: #4d75c3 is too dark on smoke to read as a thin line
+    low="#6f93dc",
     neutral="#7a705e",
     trim=_BRASS_DARK,
     title_font="Cinzel Decorative",
     uppercase_titles=True,
-    row_height=0.30,  # room for the portraits
+    row_height=0.30,
     rc=_rc(
         _SMOKE,
         _CREAM,
         "#b8aa90",
         "#2c2620",
         {
-            # Glyphs Josefin lacks (→, the − minus sign) fall back to DejaVu, one by one.
             "font.family": ["Josefin Sans", "DejaVu Sans"],
-            # ...but the fallback − is wider than Josefin's digits ("- 2"): use its own hyphen.
             "axes.unicode_minus": False,
             "font.size": 9.5,
             "axes.edgecolor": _BRASS_DARK,
             "axes.titlecolor": _BRASS_LIGHT,
             "axes.titlesize": 14,
             "axes.titlepad": 14,
-            "grid.linestyle": (0, (1, 3)),  # dotted, like engraved guide lines
-            # Lay out inside the figure (not crop afterwards) and keep clear of the frame.
+            "grid.linestyle": (0, (1, 3)),
             "figure.constrained_layout.use": True,
             "figure.constrained_layout.w_pad": 0.3,
             "figure.constrained_layout.h_pad": 0.3,
@@ -130,13 +111,11 @@ _active: Theme = DEADLOCK
 
 
 def register_fonts() -> None:
-    """Make the bundled .ttf files known to matplotlib (safe to call more than once)."""
     for path in FONTS_DIR.glob("*.ttf"):
         font_manager.fontManager.addfont(str(path))
 
 
 def use(name: str) -> Theme:
-    """Pick the theme every chart will use from now on."""
     global _active
     if name not in THEMES:
         raise ValueError(f"unknown theme {name!r}; choose one of {sorted(THEMES)}")
@@ -151,16 +130,13 @@ def active() -> Theme:
 
 @contextmanager
 def style() -> Iterator[Theme]:
-    """`with theme.style() as t:` applies the active theme's rc settings inside the block."""
     with plt.rc_context(_active.rc):
         yield _active
 
 
 def finish(fig: plt.Figure) -> None:
-    """Theme touches applied right before saving: title font/case and the art-deco frame."""
     t = _active
     for ax in fig.axes:
-        # Each axes has three title slots; ours lives in "left" (axes.titlelocation).
         for loc in ("left", "center", "right"):
             text = ax.get_title(loc)
             if not text:
@@ -175,10 +151,9 @@ def finish(fig: plt.Figure) -> None:
 
 
 def _deco_frame(fig: plt.Figure, color: str) -> None:
-    """Double brass border with small diamonds at the corners, in figure coordinates (0–1)."""
     w, h = fig.get_size_inches()
-    m = 0.08  # outer margin, inches
-    gap = 0.05  # space between the two lines, inches
+    m = 0.08
+    gap = 0.05
     for inset, lw in ((m, 1.4), (m + gap, 0.6)):
         fig.add_artist(
             Rectangle(
@@ -192,7 +167,7 @@ def _deco_frame(fig: plt.Figure, color: str) -> None:
                 zorder=-1,
             )
         )
-    r = 0.07  # diamond radius, inches; drawn in inch units so it stays square
+    r = 0.07
     for x, y in ((m, m), (w - m, m), (m, h - m), (w - m, h - m)):
         fig.add_artist(
             RegularPolygon(

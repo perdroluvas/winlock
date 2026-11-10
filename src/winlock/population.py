@@ -1,11 +1,4 @@
-"""Filters that define the analysis population, and the named time windows inside it.
-
-The population is every complete match (12 players, 6 winners) of the configured modes that
-started inside the span of the `[windows]` in config. Each analysis then asks for one window by
-name (e.g. "pre" = the last 24 h before the update). Windows can overlap (the placebo's second
-half is the patch's first half), so they are selected by start_time instead of stored as a
-per-row label.
-"""
+"""The analysis population and the named time windows inside it."""
 
 from typing import Any
 
@@ -15,7 +8,6 @@ import pandas as pd
 # Only the columns the analysis needs; account_id never enters the population table.
 POPULATION_COLUMNS = ["match_id", "hero_id", "team", "won", "start_time"]
 
-# Row filters, applied cumulatively (in this order) by population_report.
 ROW_FILTERS = [
     (
         "window",
@@ -30,13 +22,11 @@ Window = tuple[str, str]
 
 
 def window(cfg: dict[str, Any], name: str) -> Window:
-    """(start, end) of a named window, ISO UTC strings; the window is [start, end)."""
     start, end = cfg["windows"][name]
     return start, end
 
 
 def population_span(cfg: dict[str, Any]) -> Window:
-    """From the earliest window start to the latest window end."""
     starts, ends = zip(*cfg["windows"].values(), strict=True)
     return min(starts), max(ends)
 
@@ -48,12 +38,7 @@ def _filter_params(cfg: dict[str, Any]) -> dict[str, Any]:
 
 
 def create_population(con: duckdb.DuckDBPyConnection, cfg: dict[str, Any]) -> None:
-    """Create the `population` table: the rows of complete matches that pass the filters.
-
-    Steps: (1) row filters from the config, minus rows flagged by `population.exclude_flags`;
-    (2) keep only matches with exactly `players_per_match` rows and `wins_per_match` winners, so
-    a match that lost a row to a flag is dropped whole.
-    """
+    """Complete matches only (12 rows, 6 winners), dropped whole otherwise."""
     pop = cfg["population"]
     where = " AND ".join(cond for _, cond in ROW_FILTERS)
     flags = "".join(f" AND NOT {flag}" for flag in pop.get("exclude_flags", []))
@@ -76,7 +61,6 @@ def create_population(con: duckdb.DuckDBPyConnection, cfg: dict[str, Any]) -> No
 
 
 def population_report(con: duckdb.DuckDBPyConnection, cfg: dict[str, Any]) -> pd.DataFrame:
-    """Rows and matches left after each filter step (requires `create_population` first)."""
     steps = [("file", "SELECT COUNT(*), COUNT(DISTINCT match_id) FROM match_player", {})]
     params = _filter_params(cfg)
     names = {"window": ["start", "end"]}
@@ -109,7 +93,6 @@ def in_window(win: Window) -> str:
 
 
 def window_sizes(con: duckdb.DuckDBPyConnection, cfg: dict[str, Any]) -> pd.DataFrame:
-    """Matches per named window. Sizes only (no outcomes), safe to look at first."""
     rows = []
     for name in cfg["windows"]:
         [(n, first, last)] = con.execute(
@@ -122,7 +105,6 @@ def window_sizes(con: duckdb.DuckDBPyConnection, cfg: dict[str, Any]) -> pd.Data
 
 
 def hero_winrates(con: duckdb.DuckDBPyConnection, win: Window) -> pd.DataFrame:
-    """Games and wins per hero for matches started in the window."""
     return con.execute(
         f"""
         SELECT hero_id, COUNT(*) AS games, SUM(CAST(won AS INT)) AS wins
@@ -135,7 +117,6 @@ def hero_winrates(con: duckdb.DuckDBPyConnection, win: Window) -> pd.DataFrame:
 
 
 def add_hero_names(df: pd.DataFrame, heroes: pd.DataFrame) -> pd.DataFrame:
-    """Put `name` and `release_date` right after `hero_id`; unknown ids become 'hero <id>'."""
     out = df.merge(heroes[["hero_id", "name", "release_date"]], on="hero_id", how="left")
     out["name"] = out["name"].fillna("hero " + out["hero_id"].astype(str))
     first = ["hero_id", "name", "release_date"]

@@ -1,9 +1,4 @@
-"""Match-outcome models: can the heroes in a match predict who wins?
-
-Each match becomes one row: a +1 for every hero on Team0, a −1 for every hero on Team1, and the
-target "Team0 won". If hero win rates are real signal, models fit on train beat a constant
-guess on test; if they are noise, they don't.
-"""
+"""Logistic regression: can the 12 heroes of a match predict the winner?"""
 
 from dataclasses import dataclass
 from typing import Any
@@ -21,7 +16,6 @@ SIDE_ONLY = "No heroes (side only)"
 
 
 def match_table(con: duckdb.DuckDBPyConnection, win: Window) -> pd.DataFrame:
-    """One row per match started in the window: start time, hero lists per team, Team0 won."""
     return con.execute(
         f"""
         SELECT match_id,
@@ -38,11 +32,7 @@ def match_table(con: duckdb.DuckDBPyConnection, win: Window) -> pd.DataFrame:
 
 
 def hero_matrix(matches: pd.DataFrame, hero_ids: list[int]) -> np.ndarray:
-    """Features: column j is +1 if hero_ids[j] played for Team0, −1 for Team1, 0 if absent.
-
-    Columns come from the fixed hero list, so train and test always line up, even when a hero
-    (e.g. one released that day) only appears on one side.
-    """
+    """+1 for each hero on Team0, −1 for each hero on Team1, 0 if absent."""
     col = {h: j for j, h in enumerate(hero_ids)}
     X = np.zeros((len(matches), len(hero_ids)))
     for i, (team0, team1) in enumerate(
@@ -56,29 +46,21 @@ def hero_matrix(matches: pd.DataFrame, hero_ids: list[int]) -> np.ndarray:
 
 
 def temporal_holdout(matches: pd.DataFrame, fraction: float) -> tuple[np.ndarray, np.ndarray]:
-    """Boolean masks (fit, validation): the last `fraction` of matches in time is validation."""
     is_val = np.arange(len(matches)) >= round(len(matches) * (1 - fraction))
     return ~is_val, is_val
 
 
 def winrate_model(X: np.ndarray, hero_rates: np.ndarray) -> np.ndarray:
-    """P(Team0 wins) from the train win rates alone: σ(Σ logit(rate) Team0 − Σ logit(rate) Team1).
-
-    No fitting: it only adds up how much each hero won in train. Unknown heroes have rate 0.5,
-    so logit = 0 and they count for nothing.
-    """
+    """P(Team0 wins) from train win rates alone, no fitting: σ(Σ logit(rate) Team0 − Team1)."""
     return expit(X @ logit(hero_rates))
 
 
 def fit_logistic(
     X, y: np.ndarray, fit: np.ndarray, val: np.ndarray, cfg: dict[str, Any]
 ) -> tuple[LogisticRegression, pd.DataFrame]:
-    """Choose the L2 strength C on the temporal validation slice, then refit on all of train.
-
-    Returns the final model and the validation log loss of each C.
-    """
+    """Choose C on the validation slice (later in time), then refit on all of train."""
     seed = cfg["stats"]["seed"]
-    fit, val = np.flatnonzero(fit), np.flatnonzero(val)  # boolean masks -> row indices
+    fit, val = np.flatnonzero(fit), np.flatnonzero(val)
     scores = []
     for C in cfg["model"]["C_grid"]:
         m = LogisticRegression(C=C, max_iter=1000, random_state=seed).fit(X[fit], y[fit])
@@ -91,8 +73,6 @@ def fit_logistic(
 
 @dataclass
 class MatchData:
-    """Train (fit) and test matches with their hero features and targets (Team0 won = 1)."""
-
     hero_ids: list[int]
     train: pd.DataFrame
     test: pd.DataFrame
@@ -105,12 +85,10 @@ class MatchData:
 def load_match_data(
     con: duckdb.DuckDBPyConnection, hero_ids: list[int], fit_window: Window, test_window: Window
 ) -> MatchData:
-    """Build the match tables, hero matrices and targets: fit on one window, test on another."""
     return match_data(hero_ids, match_table(con, fit_window), match_table(con, test_window))
 
 
 def match_data(hero_ids: list[int], train: pd.DataFrame, test: pd.DataFrame) -> MatchData:
-    """MatchData from two match tables (see match_table)."""
     return MatchData(
         hero_ids=hero_ids,
         train=train,
@@ -123,20 +101,12 @@ def match_data(hero_ids: list[int], train: pd.DataFrame, test: pd.DataFrame) -> 
 
 
 def rate_vector(train_rates: pd.Series, hero_ids: list[int]) -> np.ndarray:
-    """Train win rate per hero in `hero_ids` order; heroes never seen in train count as 50%."""
     return train_rates.reindex(hero_ids).fillna(0.5).to_numpy()
 
 
 def fit_baselines(
     data: MatchData, rates: np.ndarray, cfg: dict[str, Any]
 ) -> tuple[dict[str, np.ndarray], LogisticRegression, pd.DataFrame]:
-    """Fit the three heroes-only models on train and return their test predictions.
-
-    1. Side only: always the train share of Team0 wins.
-    2. Win-rate model: train win rates added up as log-odds (no fitting).
-    3. Logistic regression, C chosen on the last part of train (in time).
-    Returns the predictions by model name, the logistic model and its validation scores.
-    """
     fit, val = temporal_holdout(data.train, cfg["model"]["validation_fraction"])
     logreg, val_scores = fit_logistic(data.X_train, data.y_train, fit, val, cfg)
     preds = predict_baselines(data.X_test, data.y_train.mean(), rates, logreg)
@@ -146,7 +116,6 @@ def fit_baselines(
 def predict_baselines(
     X_test: np.ndarray, team0_share: float, rates: np.ndarray, logreg: LogisticRegression
 ) -> dict[str, np.ndarray]:
-    """Predictions of the three fitted models for any hero matrix (e.g. another test window)."""
     return {
         SIDE_ONLY: np.full(len(X_test), team0_share),
         "Win-rate model": winrate_model(X_test, rates),
@@ -157,14 +126,7 @@ def predict_baselines(
 def retrain_check(
     post: MatchData, old_model: LogisticRegression, cfg: dict[str, Any]
 ) -> dict[str, Any]:
-    """After the update: does a model refit on new-game matches beat the old one?
-
-    `post.test` is the post-patch window. Its first `post_fit_fraction` (in time) refits a
-    logistic regression (C chosen again on the last part of that slice); both models then
-    predict **the same** remaining matches, so the comparison is paired match by match.
-    Returns the metrics of both models and the paired log-loss difference (new − old; negative =
-    retraining helps).
-    """
+    """Refit on early post-update matches; score old and new model on the same later ones."""
     alpha = cfg["stats"]["alpha"]
     n_fit = round(len(post.test) * cfg["model"]["post_fit_fraction"])
     fit_rows, eval_rows = np.arange(n_fit), np.arange(n_fit, len(post.test))
