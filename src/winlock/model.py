@@ -151,3 +151,25 @@ def retrain_check(
         "n_eval": len(eval_rows),
         "eval_start": post.test["start_time"].iloc[n_fit],
     }
+
+
+def bootstrap_coefficients(
+    X: np.ndarray, y: np.ndarray, C: float, n_refits: int, seed: int
+) -> np.ndarray:
+    """Refit on matches drawn with replacement; one row of weights per refit.
+
+    The unit drawn is the whole match, so the spread of a weight across refits shows how
+    much it depends on which matches happened to be in train.
+    """
+    rng = np.random.default_rng(seed)
+    out = np.empty((n_refits, X.shape[1]))
+    for b in range(n_refits):
+        rows = rng.integers(0, len(y), len(y))
+        out[b] = LogisticRegression(C=C, max_iter=1000).fit(X[rows], y[rows]).coef_[0]
+    return out
+
+
+def coefficient_intervals(boot: np.ndarray, alpha: float) -> tuple[np.ndarray, np.ndarray]:
+    """Percentile interval per weight: the middle 1 − alpha of the refits."""
+    low, high = np.percentile(boot, [100 * alpha / 2, 100 * (1 - alpha / 2)], axis=0)
+    return low, high

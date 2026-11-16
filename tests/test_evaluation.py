@@ -35,3 +35,25 @@ def test_a_big_change_is_significant():
     a, b = rates([500, 500, 500]), rates([500, 500, 600])  # hero 3: 50% -> 60%
     s = change_summary(compare_samples(a, b, NAMES), NAMES, alpha=0.05)
     assert s["significant_holm"] == 1
+
+
+def test_extract_agreement_of_identical_extracts():
+    from winlock.evaluation import extract_agreement
+
+    ev = pd.DataFrame(
+        {
+            "hero_id": [1, 2, 3],
+            "rate_before": [0.50, 0.52, 0.47],
+            "rate_after": [0.50, 0.49, 0.48],
+            "diff": [0.0, -0.03, 0.01],
+            "p_holm": [1.0, 0.001, 0.4],
+        }
+    )
+    same = extract_agreement(ev, ev, alpha=0.05)
+    assert same["max_rate_shift"] == 0 and same["max_diff_shift"] == 0
+    assert same["significant_old"] == same["significant_new"] == same["significant_both"] == 1
+
+    shifted = ev.assign(rate_after=ev["rate_after"] + 0.002, diff=ev["diff"] + 0.002)
+    out = extract_agreement(ev, shifted, alpha=0.05)
+    assert out["max_rate_shift"] == pytest.approx(0.002)
+    assert out["max_diff_shift"] == pytest.approx(0.002)

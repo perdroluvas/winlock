@@ -12,7 +12,7 @@ the numbers, the insight and the wording traps. Numbers come from `reports/table
 - The code was trimmed to match (2026-11-08): picks/bans, Ranked vs Unranked, synergy and the
   stability analysis are gone; they're in git history if ever needed.
 
-8 charts, in two notebooks that follow the article: `01_winrates` (Parts 1–2) and `02_model`
+9 charts, in two notebooks that follow the article: `01_winrates` (Parts 1–2) and `02_model`
 (Parts 3–6).
 
 ---
@@ -60,8 +60,16 @@ happens to that prediction when the developers patch the game overnight?
   - 20 of 44 heroes changed after Holm;
   - Violet 52.7% → 47.1% (−5.6 pp), Mo & Krill −5.5, Nurse Harrow −3.2;
   - Warden +3.4, McGinnis +3.3, Deadman Danny +2.3.
-- **Proof it isn't the usual daily wiggle (one sentence):** the same comparison between two
-  ordinary days, with no update, finds 0 of 44 heroes changed (`winlock patch` prints it).
+- **Proof it isn't the usual daily wiggle (two sentences):**
+  - the same comparison between two ordinary days, with no update, finds 0 of 44 heroes
+    changed (`winlock patch` prints it);
+  - the same comparison across the Friday → Saturday one week earlier also finds 0 of 44, and
+    its largest change is 0.8 pp (`winlock robustness`). So "it was just the weekend" doesn't
+    explain a −5.6 pp move.
+- **The card for social posts:** `patch_movers.png`, the 10 largest changes.
+- **Newest heroes (ringed in the scatter):** the update also made the 6 newest heroes
+  bannable (0% of matches banned them before, 1–9% after). Their changes mix the balance
+  changes with who still gets to play them.
 - **Holm in one sentence:** 44 tests at once give about 2 false alarms by luck, so the bar is made
   stricter.
 - **Wording trap:** "games with Violet were won 47.1% of the time after the update", not "Violet
@@ -112,8 +120,14 @@ happens to that prediction when the developers patch the game overnight?
 
 - The weights correlate **0.95** with the heroes' win rates, so the model mostly re-learns the
   win rates.
-- **The exception is McGinnis:** raw win rate 48.3%, but a **positive** weight. Once the model
-  accounts for who she plays with and against, she looks better than her win rate says.
+- **The exception is McGinnis:** raw win rate 48.3%, but a **positive** weight: +0.108, with a
+  95% bootstrap interval of +0.089 to +0.129. Once the model accounts for who she plays with
+  and against, she looks better than her win rate says.
+- **What "positive" means:** the weights sum to zero, so a weight compares a hero with the
+  *average hero* (win rate 49.3%), not with 50%. McGinnis is below average by win rate and
+  above average by weight.
+- **Bootstrap in one sentence:** refit the model 500 times on matches drawn with replacement
+  and see how much each weight moves; the middle 95% of the refits is the interval.
 - **Reading a weight:** σ(w) − 0.5 is roughly the change in win chance for one hero against an
   average opponent. Use this to turn one hero's weight into pp (exercise below).
 - **The summed-win-rate model** (59.7%) is the same formula with weights = logit(win rate) and no
@@ -139,10 +153,13 @@ happens to that prediction when the developers patch the game overnight?
 
 ## Part 7: Limitations
 
-- **Two days around one update.** Post = Friday evening → Saturday evening, pre = Thursday →
-  Friday, so the weekend mix isn't separated. There's also a Halloween event on the post side.
+- **One update, one weekend of control.** Post = Friday evening → Saturday evening. An
+  ordinary Friday → Saturday a week earlier moved nothing, but that is a single weekend.
+  There's also a Halloween event on the post side.
+- **Bans:** the newest heroes became bannable with the update, so who plays them changed too.
 - **New heroes** were still being learned.
-- **Late arrivals:** the data wasn't complete when it was extracted.
+- **Late arrivals:** the data wasn't complete when it was extracted. Extracted again 8 days
+  later it has 9–10% more matches, and no hero's win rate moves by more than 0.15 pp.
 - **No players in the model:** win rates and weights mix the hero with the players who pick
   them.
 
@@ -153,29 +170,35 @@ hours of new data bring it back. The other 40% is the players."
 
 ---
 
-## Social drafts (publish only after the blog post is live)
+## Social drafts
 
 ### LinkedIn
 
-> How well can you predict a Deadlock match from the 12 heroes alone? And what does a patch do to
-> that prediction?
+Image: `patch_movers.png` (1080×1350, the 4:5 size feeds show largest). Lead with the idea a
+reader who never played Deadlock can use: a model describes the world it was trained on.
+
+> A model trained on yesterday's world gets worse when the world changes. I measured by how
+> much, on ~800k matches of the game Deadlock.
 >
-> I trained a logistic regression on ~360k matches and tested it before and after the Halloween
-> update.
+> The game got a big update on October 30. I compared the 24 h before with the 24 h after.
 >
-> • Before: 59.9% of winners called correctly (95% CI 59.7–60.2%). A coin flip gets 50%.
-> • The update moved win rates: Violet −5.6 pp, Mo & Krill −5.5, Warden +3.4.
-> • The same model after the patch: 58.8%. Retrained on a few hours of new matches: back to
+> • The update moved hero win rates by up to 5.6 points. Between two days with no update,
+>   including the same Friday → Saturday a week earlier, nothing moved (0 of 44 heroes).
+> • A logistic regression that sees only the 12 heroes of a match calls 59.9% of winners
+>   (95% CI 59.7–60.2%). A coin flip gets 50%.
+> • The same model after the update: 58.8%. Refit on a few hours of new matches: back to
 >   59.9%.
-> • What it learned matches the win rates (r = 0.95), with one exception: McGinnis is better than
->   her win rate says.
 >
-> The honest part: the model never sees the players, on purpose. 60% is how far heroes alone go.
+> The honest part: the model never sees the players, on purpose. 60% is how far heroes alone
+> go.
 >
-> Write-up, charts and code: [blog link] · [GitHub link]
-> Data: Deadlock API (deadlock-api.com)
+> What I practised: confidence intervals, multiple-comparison correction, placebo tests, and
+> splitting data by time so the model never sees the future.
 >
-> #DataScience #MachineLearning #Python #Deadlock
+> Code and charts: [GitHub link]
+> Data: Deadlock API (deadlock-api.com). Not affiliated with Valve.
+>
+> #DataScience #MachineLearning #Python #Statistics
 
 ### Twitter / X thread
 
@@ -199,3 +222,8 @@ hours of new data bring it back. The other 40% is the players."
    95% half-width (the simple formula is fine at this n).
 5. **Holm:** p-values 0.004, 0.009, 0.011, 0.03, 0.30, α = 0.05. How many survive?
 6. **Paired comparison:** why compare the old and retrained models on the *same* matches?
+7. **Bootstrap:** five matches with outcomes 1, 1, 0, 1, 0 (win share 60%). Draw 5 with
+   replacement three times by hand (roll a die, reroll a 6) and compute each share. Why do the
+   shares differ, and what would the middle 95% of 500 such shares tell you?
+8. **Sum to zero:** three heroes have weights +0.2, −0.1 and w. If the weights must sum to
+   zero, what is w? What does a weight of 0 then mean?

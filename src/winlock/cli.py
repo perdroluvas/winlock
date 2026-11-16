@@ -24,9 +24,14 @@ BEFORE_AFTER = ("before", "after")
 
 
 class Run:
-    def __init__(self) -> None:
+    def __init__(
+        self, match_player: str | None = None, windows: dict[str, list[str]] | None = None
+    ) -> None:
+        """The main extract and windows by default; the robustness checks pass their own."""
         self.cfg: dict[str, Any] = load_config()
-        self.con = connect()
+        if windows:
+            self.cfg["windows"] = windows
+        self.con = connect(match_player)
         create_population(self.con, self.cfg)
         self.heroes = load_heroes()
         self.alpha = self.cfg["stats"]["alpha"]
@@ -155,12 +160,70 @@ def cmd_patch() -> None:
         by_abs(results["patch"], "z").head(10)[cols + ["p_holm"]],
     )
 
+    newest = run.cfg["patch"]["newly_bannable"]
+    patch = results["patch"]
+    patch["newly_bannable"] = patch["release_date"].rank(ascending=False) <= newest
     run.chart(
         figures.before_after_chart,
-        results["patch"],
+        patch,
         run.figures / "patch_before_after.png",
         "Hero win rates before vs after the update",
+        alpha=run.alpha,
     )
+    run.chart(
+        figures.movers_chart,
+        patch,
+        run.figures / "patch_movers.png",
+        "What one update did to hero win rates",
+        subtitle=(
+            f"Deadlock, 24 h before vs 24 h after the {run.cfg['patch']['title']}\n"
+            f"{patch['games_before'].sum() // 12:,} matches before, "
+            f"{patch['games_after'].sum() // 12:,} after. Lines: 95% Wilson CI"
+        ),
+        n=run.cfg["figures"]["movers"],
+        alpha=run.alpha,
+        portraits_dir=run.portraits,
+    )
+    run.report_written()
+
+
+def cmd_robustness() -> None:
+    cfg = load_config()
+    rb, alpha = cfg["robustness"], cfg["stats"]["alpha"]
+
+    # 1. Weekend placebo: Thu->Fri vs Fri->Sat one week before the update, no patch between.
+    wk = rb["weekend"]
+    run = Run(wk["match_player"], {"before": wk["before"], "after": wk["after"]})
+    show("Weekend placebo, complete matches per window:", window_sizes(run.con, run.cfg))
+    ev = compare(run, "before", "after")
+    run.table(ev, "weekend_placebo_changes.csv")
+    print_change(evaluation.change_summary(ev, BEFORE_AFTER, alpha), "weekend placebo")
+    cols = ["name", "games_before", "rate_before", "games_after", "rate_after", "diff", "z"]
+    show("Largest weekend-placebo changes:", by_abs(ev, "z").head(6)[cols + ["p_holm"]])
+
+    # 2. Late arrivals: the patch comparison again on a later extract of the same window.
+    old, new = Run(), Run(rb["late_arrivals"]["match_player"])
+    sizes = window_sizes(old.con, old.cfg).merge(
+        window_sizes(new.con, new.cfg), on="window", suffixes=("_old", "_new")
+    )[["window", "matches_old", "matches_new"]]
+    sizes["pct_more"] = 100 * (sizes["matches_new"] / sizes["matches_old"] - 1)
+    show("Late arrivals, complete matches per window (old vs new extract):", sizes, 1)
+    c = cfg["comparisons"]["patch"]
+    ev_old, ev_new = (compare(r, c["before"], c["after"]) for r in (old, new))
+    print_change(evaluation.change_summary(ev_new, BEFORE_AFTER, alpha), "patch, new extract")
+    a = evaluation.extract_agreement(ev_old, ev_new, alpha)
+    print(
+        f"Old vs new extract, {a['heroes']} heroes:\n"
+        f"  largest shift in a hero's win rate: {100 * a['max_rate_shift']:.2f} pp\n"
+        f"  largest shift in a before/after change: {100 * a['max_diff_shift']:.2f} pp\n"
+        f"  correlation of the changes: {a['corr_diff']:.4f}\n"
+        f"  significant after Holm: {a['significant_old']} old, {a['significant_new']} new, "
+        f"{a['significant_both']} in both\n"
+    )
+    late = ev_old.merge(ev_new, on=["hero_id", "name"], suffixes=("_old", "_new"))
+    keep = [f"{k}_{s}" for k in ("diff", "p_holm") for s in ("old", "new")]
+    late = late[["hero_id", "name", *keep]]
+    run.table(late, "late_arrivals_changes.csv")
     run.report_written()
 
 
@@ -208,8 +271,28 @@ def cmd_model() -> None:
         f"{d['ci_high']:+.5f}, p = {d['p']:.3g}); negative = retraining helps\n"
     )
 
-    coef = add_hero_names(pd.DataFrame({"hero_id": hero_ids, "coef": logreg.coef_[0]}), run.heroes)
+    refits = run.cfg["model"]["bootstrap_refits"]
+    print(f"Bootstrap: refitting on {refits} resamples of the train matches...")
+    boot = model.bootstrap_coefficients(
+        pre.X_train, pre.y_train, logreg.C, refits, run.cfg["stats"]["seed"]
+    )
+    low, high = model.coefficient_intervals(boot, run.alpha)
+    coef = add_hero_names(
+        pd.DataFrame(
+            {"hero_id": hero_ids, "coef": logreg.coef_[0], "ci_low": low, "ci_high": high}
+        ),
+        run.heroes,
+    )
     coef = coef.merge(train_rates.rename("rate_train"), left_on="hero_id", right_index=True)
+    # Weights sum to zero, so a weight's sign is relative to the average hero: compare it
+    # with the hero's win rate relative to the average hero's.
+    below_avg = coef["rate_train"] < coef["rate_train"].mean()
+    flipped = coef[(below_avg & (coef["ci_low"] > 0)) | (~below_avg & (coef["ci_high"] < 0))]
+    show(
+        f"Weight on the other side of average than the win rate (average hero "
+        f"{coef['rate_train'].mean():.1%}), {1 - run.alpha:.0%} bootstrap interval excluding 0:",
+        flipped[["name", "rate_train", "coef", "ci_low", "ci_high"]],
+    )
     run.table(coef.sort_values("coef"), "model_coefficients.csv")
     corr = np.corrcoef(coef["rate_train"], coef["coef"])[0, 1]
     print(f"Correlation between coefficient and train win rate: {corr:.2f}\n")
@@ -255,8 +338,11 @@ def cmd_portraits() -> None:
     print(f"Downloaded {len(written)} portraits; {cached} of {len(hero_ids)} heroes cached")
 
 
-def cmd_extract(dry_run: bool = False) -> None:
+def cmd_extract(dry_run: bool = False, window: str | None = None) -> None:
     cfg = load_config()
+    if window:
+        # A named extra window overrides the main one's dates and output folder.
+        cfg["extract"] = cfg["extract"] | cfg["extract"]["extra"][window]
     meta = extract.run_extract(cfg, resolve_path(cfg["extract"]["out_dir"]), dry_run=dry_run)
     gap = meta["ingestion_gap_hours"]
     print(
@@ -295,6 +381,7 @@ COMMANDS = {
     "figures": (cmd_figures, "Wilson CI per hero, 24 h before and after the update"),
     "patch": (cmd_patch, "win rates before vs after the update, plus the placebo"),
     "model": (cmd_model, "logistic regression: before vs after the update, and retraining"),
+    "robustness": (cmd_robustness, "weekend placebo and late-arrival check (other extracts)"),
     "portraits": (cmd_portraits, "download hero portraits once (network) for the win-rate chart"),
 }
 
@@ -306,6 +393,9 @@ def main() -> None:
         sub.add_parser(name, help=help_text)
     sub.choices["extract"].add_argument(
         "--dry-run", action="store_true", help="only list the files that would be read"
+    )
+    sub.choices["extract"].add_argument(
+        "--window", help="a named window from [extract.extra] instead of the patch window"
     )
     args = vars(parser.parse_args())
     COMMANDS[args.pop("command")][0](**args)

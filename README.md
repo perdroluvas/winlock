@@ -1,11 +1,26 @@
 # winlock
 
+[![CI](https://github.com/perdroluvas/winlock/actions/workflows/ci.yml/badge.svg)](https://github.com/perdroluvas/winlock/actions/workflows/ci.yml)
+
 **Is a Deadlock hero's win rate reliable, or is it statistical noise? And what does a game
 update do to it?**
 
 Win rate per hero with Wilson confidence intervals, before and after Deadlock's
 **"Halloween 2026 + Gameplay Update"** (published 2026-10-30 20:51:49 UTC). It uses public match
 data from the [Deadlock API](https://deadlock-api.com/data-dumps).
+
+<p align="center">
+  <img src="reports/figures/patch_movers.png" width="520"
+       alt="The ten largest hero win-rate changes across the update, with 95% Wilson intervals">
+</p>
+
+- **Win rates are signal:** 42 of 44 heroes differ from 50%, each measured to about ±0.4 pp.
+- **The update moved them:** 20 of 44 heroes changed. Two comparisons with no update, one of
+  them across the same Friday → Saturday a week earlier, find 0 of 44.
+- **Heroes alone predict ~60% of matches.** The update costs a logistic regression about 1
+  point, and a few hours of new matches bring it back.
+
+Details in [Result](#result). Every chart is in [`reports/figures/`](reports/figures).
 
 ## Data
 
@@ -35,9 +50,15 @@ uv run winlock quality     # population, window sizes, the dip in match starts a
 uv run winlock figures     # Wilson CI per hero, 24 h before and 24 h after the update
 uv run winlock patch       # how did win rates change across the update? (+ placebo)
 uv run winlock model       # logistic regression: before vs after the update, retraining
+
+uv run winlock extract --window weekend_placebo   # the same weekdays, one week earlier
+uv run winlock robustness  # weekend placebo and late-arrival check
 ```
 
-Charts go to `reports/figures/` (8 charts), tables to `reports/tables/`. The notebooks
+`extract` writes a new time-stamped folder each run. Point `[data]` and `[robustness]` in
+`config/analysis.toml` at the runs to use.
+
+Charts go to `reports/figures/` (9 charts), tables to `reports/tables/`. The notebooks
 `01_winrates` and `02_model` show the charts in article order.
 
 ## Method
@@ -68,7 +89,13 @@ Charts go to `reports/figures/` (8 charts), tables to `reports/tables/`. The not
    - compared with a coin flip and with summed win rates (no fitting);
    - tested on pre and on post, accuracy with a Wilson CI, plus log loss and calibration;
    - **retrain check:** refit on the first 70% of post, then score the old and the refit model
-     on the same last 30%.
+     on the same last 30%;
+   - **weights:** a 95% bootstrap interval per hero, from 500 refits on train matches drawn
+     with replacement.
+6. **Robustness** (`robustness`), on two other extracts:
+   - the **weekend placebo**: Thu 10-22 20:30 → Fri 10-23 20:30 vs Fri 21:30 → Sat 10-24
+     21:30, the patch comparison's weekdays and hours with no update;
+   - **late arrivals**: the patch comparison again on the same window extracted 8 days later.
 
 ## What was discarded and why
 
@@ -91,13 +118,22 @@ Numbers from `reports/tables/`. The full story is in `docs/article-outline.md`.
    - With ~60k games per hero, the median 95% CI is ±0.4 pp.
 2. **The update changed them.**
    - 20 of 44 heroes changed after Holm, SD of z 5.96.
-   - The placebo, at a fake cut, finds 0 of 44 (SD of z 0.87).
+   - The placebo, at a fake cut 24 h earlier, finds 0 of 44 (SD of z 0.87).
+   - The weekend placebo, Friday → Saturday one week earlier, also finds 0 of 44 (SD of z
+     0.95). The largest change there is 0.8 pp.
    - Biggest moves: Violet −5.6 pp, Mo & Krill −5.5, Warden +3.4, McGinnis +3.3.
+   - **Late arrivals don't change it.** Extracted again 8 days later, the windows hold 9–10%
+     more matches. No hero's win rate shifts by more than 0.15 pp, and 21 of 44 heroes change
+     after Holm, including all of the original 20.
 3. **Heroes alone predict ~60% of matches.**
    - Logistic regression on pre: 59.9% (95% CI 59.7–60.2%), log loss 0.663.
    - Summed win rates, no fitting: 59.7%. A coin flip: 50.1%.
 4. **What it learned:** the weights correlate 0.95 with the win rates. The exception is
-   McGinnis: a 48.3% win rate, but a positive weight.
+   McGinnis.
+   - Weights sum to zero, so a positive weight means "better than the average hero", whose
+     win rate is 49.3%.
+   - McGinnis wins 48.3%, below average, but her weight is +0.108 (95% bootstrap interval
+     +0.089 to +0.129).
 5. **The update costs the model about 1 point, and retraining recovers it.**
    - The same model after the update: 58.8% (58.6–59.1%).
    - Refit on early post-update matches: 59.9%, against the old model's 58.8% on the same
@@ -105,14 +141,29 @@ Numbers from `reports/tables/`. The full story is in `docs/article-outline.md`.
 
 ## Limitations
 
-- **Two days around one update.** The post side is Friday evening → Saturday evening; the pre
-  side is Thursday → Friday. A weekday/weekend player mix isn't separated from the patch, and
-  the placebo doesn't cover a weekend.
+- **One update, one weekend of control.** The post side is Friday evening → Saturday evening.
+  The weekend placebo shows an ordinary Friday → Saturday moves nothing, but it is a single
+  earlier weekend. Whether a smaller update shipped inside it wasn't checked.
 - **The Halloween event** (candy buffs) runs only on the post side.
-- **New heroes** (Violet, Nurse Harrow, Deadman Danny…) were still being learned. The placebo
-  shows no drift for them inside the old game, though.
-- **Late arrivals:** the data was still filling in. A re-extraction can check that late
-  matches don't change the result.
+- **Bans changed who plays the newest heroes.** The update made the 6 newest heroes
+  bannable: 0% of matches banned them before, 1–9% after (Deadman Danny 9.1%, Nurse Harrow
+  4.2%, Violet 4.1%). Their win-rate changes mix the balance changes with that selection.
+- **New heroes** (Violet, Nurse Harrow, Deadman Danny…) were still being learned. Neither
+  placebo shows drift for them inside the old game, though.
+- **Late arrivals:** checked for the win rates and the patch comparison (above). The model
+  wasn't refit on the later extract.
+- **44 weight intervals, read one at a time.** The bootstrap intervals aren't corrected for
+  looking at all 44 heroes.
 - **Players, not heroes.** A win rate measures who plays the hero as much as the hero, and
   `party` isn't available. Player clustering of the CIs isn't checked yet.
 - **Skill** (`average_badge`) exists only for Ranked and isn't analysed.
+
+## License and credits
+
+- Code: [MIT](LICENSE).
+- Data: the [Deadlock API](https://deadlock-api.com) public data dumps.
+- Fonts: Cinzel, Cinzel Decorative and Josefin Sans, under the SIL Open Font License
+  (`src/winlock/assets/fonts/`).
+- Deadlock, its heroes and the hero portraits in the charts belong to Valve. This is a fan
+  project, not affiliated with or endorsed by Valve. The portraits aren't covered by the MIT
+  license.

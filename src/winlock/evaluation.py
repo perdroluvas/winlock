@@ -33,3 +33,23 @@ def change_summary(ev: pd.DataFrame, names: tuple[str, str], alpha: float) -> di
         "significant_holm": int((ev["p_holm"] < alpha).sum()),
         "significant_bh": int((ev["p_bh"] < alpha).sum()),
     }
+
+
+def extract_agreement(old: pd.DataFrame, new: pd.DataFrame, alpha: float) -> dict[str, Any]:
+    """The same before/after comparison on two extracts of the same window: what moved?"""
+    m = old.merge(new, on="hero_id", suffixes=("_old", "_new"))
+    sig_old, sig_new = (m[f"p_holm_{k}"] < alpha for k in ("old", "new"))
+    return {
+        "heroes": len(m),
+        "max_rate_shift": float(
+            max(
+                (m[f"rate_{side}_new"] - m[f"rate_{side}_old"]).abs().max()
+                for side in ("before", "after")
+            )
+        ),
+        "max_diff_shift": float((m["diff_new"] - m["diff_old"]).abs().max()),
+        "corr_diff": float(np.corrcoef(m["diff_old"], m["diff_new"])[0, 1]),
+        "significant_old": int(sig_old.sum()),
+        "significant_new": int(sig_new.sum()),
+        "significant_both": int((sig_old & sig_new).sum()),
+    }

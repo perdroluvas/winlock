@@ -110,16 +110,54 @@ def winrate_ci_chart(
         return _save(fig, path, dpi)
 
 
-def _label_points(ax, x, y, names) -> None:
+LABEL_SIZE = 9
+# Where a label may sit around its point, tried in order: (dx, dy in points, ha, va).
+LABEL_SPOTS = [
+    (6, 3, "left", "bottom"),
+    (-6, 3, "right", "bottom"),
+    (6, -3, "left", "top"),
+    (-6, -3, "right", "top"),
+]
+
+
+def _label_points(ax, x, y, names, all_x=None, all_y=None) -> None:
+    """Name some points, each label on the side where it covers the fewest other points.
+
+    Call it after the axis limits are set: positions are compared in screen pixels.
+    """
     t = theme.active()
+    fig = ax.figure
+    px = fig.dpi / 72  # pixels per point
+    others = ax.transData.transform(
+        np.column_stack([x if all_x is None else all_x, y if all_y is None else all_y])
+    )
     for xi, yi, name in zip(x, y, names, strict=True):
+        cx, cy = ax.transData.transform((xi, yi))
+        # A rough text box: about 0.55 em per character, 1.3 em tall.
+        w, h = 0.55 * LABEL_SIZE * len(name) * px, 1.3 * LABEL_SIZE * px
+
+        def covered(spot, cx=cx, cy=cy, w=w, h=h) -> int:
+            dx, dy, ha, va = spot
+            x0 = cx + dx * px - (w if ha == "right" else 0)
+            y0 = cy + dy * px - (h if va == "top" else 0)
+            inside = (
+                (others[:, 0] > x0 - 4 * px)
+                & (others[:, 0] < x0 + w + 4 * px)
+                & (others[:, 1] > y0 - 4 * px)
+                & (others[:, 1] < y0 + h + 4 * px)
+            )
+            return int(inside.sum())
+
+        dx, dy, ha, va = min(LABEL_SPOTS, key=covered)
         ax.annotate(
             name,
             (xi, yi),
-            xytext=(5, 3),
+            xytext=(dx, dy),
             textcoords="offset points",
-            fontsize=8,
-            color=t.text_secondary,
+            ha=ha,
+            va=va,
+            fontsize=LABEL_SIZE,
+            color=t.text,
         )
 
 
@@ -136,11 +174,16 @@ def before_after_chart(
     dpi: int = 150,
     names: tuple[str, str] = ("before", "after"),
     axis_labels: tuple[str, str] = ("Win rate before (24 h)", "Win rate after (24 h)"),
+    alpha: float = 0.05,
 ) -> Path:
+    """Each hero's rate in one sample against the other; on the diagonal nothing changed.
+
+    An optional boolean column `newly_bannable` rings those heroes.
+    """
     x, y = (ev[f"rate_{n}"] for n in names)
     lo = min(x.min(), y.min()) - 0.01
     hi = max(x.max(), y.max()) + 0.01
-    moved = ev["p_holm"] < 0.05
+    moved = ev["p_holm"] < alpha
     with theme.style() as t:
         fig, ax = plt.subplots(figsize=(6.5, 6.5))
         ax.plot(
@@ -168,8 +211,18 @@ def before_after_chart(
                 linewidth=1.5,
                 label=label,
             )
-        top = ev.reindex(ev["z"].abs().sort_values(ascending=False).index).head(n_labels)
-        _label_points(ax, top[f"rate_{names[0]}"], top[f"rate_{names[1]}"], top["name"])
+        if "newly_bannable" in ev and ev["newly_bannable"].any():
+            ring = ev["newly_bannable"]
+            ax.scatter(
+                x[ring],
+                y[ring],
+                s=150,
+                facecolor="none",
+                edgecolor=t.text,
+                linewidth=1.2,
+                zorder=4,
+                label="newest heroes: bannable only after",
+            )
         ax.set_xlim(lo, hi)
         ax.set_ylim(lo, hi)
         ax.set_aspect("equal")
@@ -179,6 +232,90 @@ def before_after_chart(
         ax.set_ylabel(axis_labels[1])
         ax.set_title(title)
         ax.legend(loc="upper left")
+        fig.canvas.draw()  # settle the layout, so label spots are judged at final positions
+        top = ev.reindex(ev["z"].abs().sort_values(ascending=False).index).head(n_labels)
+        _label_points(ax, top[f"rate_{names[0]}"], top[f"rate_{names[1]}"], top["name"], x, y)
+        return _save(fig, path, dpi)
+
+
+def movers_chart(
+    ev: pd.DataFrame,
+    path: Path,
+    title: str,
+    subtitle: str = "",
+    n: int = 10,
+    alpha: float = 0.05,
+    dpi: int = 150,
+    portraits_dir: Path | None = None,
+) -> Path:
+    """A 4:5 card for social feeds: the n largest before -> after changes, one arrow each."""
+    d = ev[ev["p_holm"] < alpha]
+    d = d.reindex(d["diff"].abs().sort_values(ascending=False).index).head(n)
+    d = d.sort_values("diff").reset_index(drop=True)
+    y = np.arange(len(d))
+    # Room above the axes for the subtitle; theme.finish() re-applies the title with this pad.
+    pad = {"axes.titlepad": 46} if subtitle else {}
+    with theme.style() as t, plt.rc_context(pad):
+        fig, ax = plt.subplots(figsize=(7.2, 9.0))
+        ax.grid(axis="y", visible=False)
+        ax.axvline(0.5, color=t.text_secondary, linewidth=1.2, zorder=1)
+        colors = np.where(d["diff"] > 0, t.high, t.low)
+        for side in ("before", "after"):
+            ax.hlines(
+                y,
+                d[f"ci_low_{side}"],
+                d[f"ci_high_{side}"],
+                color=t.neutral if side == "before" else colors,
+                linewidth=3,
+                alpha=0.55,
+                zorder=2,
+            )
+        ax.scatter(
+            d["rate_before"], y, color=t.neutral, s=70, zorder=4, edgecolor=t.surface, linewidth=1.5
+        )
+        right_end = d[["ci_high_before", "ci_high_after"]].max(axis=1)
+        for yi, a, b, diff, end, color in zip(
+            y, d["rate_before"], d["rate_after"], d["diff"], right_end, colors, strict=True
+        ):
+            ax.annotate(
+                "",
+                xy=(b, yi),
+                xytext=(a, yi),
+                arrowprops={"arrowstyle": "-|>", "color": color, "linewidth": 2.2},
+                zorder=3,
+            )
+            ax.annotate(
+                f"{100 * diff:+.1f} pp",
+                (end, yi),
+                xytext=(8, 0),
+                textcoords="offset points",
+                va="center",
+                fontsize=12,
+                color=color,
+            )
+        ax.set_yticks(y, d["name"], fontsize=13)
+        card = theme.Theme(**{**t.__dict__, "row_height": 0.55})
+        _portrait_axis(ax, d["hero_id"], y, portraits_dir, card)
+        ax.set_ylim(-0.7, len(d) - 0.3)
+        span = d[["ci_low_before", "ci_low_after", "ci_high_before", "ci_high_after"]].to_numpy()
+        ax.set_xlim(span.min() - 0.005, span.max() + 0.02)
+        _percent_axis(ax.xaxis)
+        ax.tick_params(axis="x", labelsize=11)
+        ax.set_xlabel("Win rate: grey dot = before, arrow tip = after", fontsize=11)
+        ax.set_title(title)
+        if subtitle:
+            left = t.rc.get("axes.titlelocation", "left") == "left"
+            ax.text(
+                0.0 if left else 0.5,
+                1.0,
+                subtitle,
+                transform=offset_copy(ax.transAxes, fig=fig, y=8, units="points"),
+                ha="left" if left else "center",
+                va="bottom",
+                fontsize=10,
+                color=t.text_secondary,
+                linespacing=1.4,
+            )
         return _save(fig, path, dpi)
 
 
@@ -253,6 +390,10 @@ def coefficients_chart(
         fig, ax = plt.subplots(figsize=(7, 5))
         ax.axhline(0, color=t.grid, linewidth=1.5, zorder=0)
         ax.axvline(0.5, color=t.grid, linewidth=1.5, zorder=0)
+        if "ci_low" in coef:
+            ax.vlines(
+                coef["rate_train"], coef["ci_low"], coef["ci_high"], color=t.accent, linewidth=1.5
+            )
         ax.scatter(
             coef["rate_train"],
             coef["coef"],
@@ -267,11 +408,15 @@ def coefficients_chart(
         picks = {coef["coef"].idxmax(), coef["coef"].idxmin()}
         picks |= set(residual.drop(list(picks)).nlargest(n_outliers).index)
         top = coef.loc[sorted(picks)]
-        _label_points(ax, top["rate_train"], top["coef"], top["name"])
         _percent_axis(ax.xaxis)
         ax.set_xlabel("Train win rate")
-        ax.set_ylabel("Logistic regression coefficient (log-odds)")
+        ylabel = "Logistic regression coefficient (log-odds)"
+        ax.set_ylabel(ylabel + ("\nline: 95% bootstrap interval" if "ci_low" in coef else ""))
         ax.set_title(title)
+        fig.canvas.draw()
+        _label_points(
+            ax, top["rate_train"], top["coef"], top["name"], coef["rate_train"], coef["coef"]
+        )
         return _save(fig, path, dpi)
 
 

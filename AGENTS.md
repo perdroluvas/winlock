@@ -8,31 +8,34 @@ then ML). Delivering the result comes second. Respond in English.
 - **Question:** is a Deadlock hero's win rate reliable, or is it statistical noise? Framed
   around the "Halloween 2026 + Gameplay Update" (2026-10-30 20:51:49 UTC): 24 h before vs 24 h
   after, with a placebo. Article skeleton: `docs/article-outline.md` (the user writes the prose).
-- **Week 1 (priority):** win rate per hero with a 95% Wilson CI, a sorted horizontal chart with the
-  50% line highlighted, and a post. Plans live in `docs/references/`; read them before discussing
-  scope.
-- **Extension (only after the base chart exists):** day-to-day stability with a per-hero z-score,
-  a split-half control (`match_id % 2`) and Holm/BH correction.
+- **Done:** win rate per hero with a 95% Wilson CI and Holm; before vs after the update with a
+  placebo; a logistic regression (heroes → winner) with a retrain check and bootstrap intervals
+  on the weights; a weekend placebo and a late-arrival check (`winlock robustness`).
+- **Now (priority):** the user writes the article and the LinkedIn post from
+  `docs/article-outline.md`. The original plans live in `docs/references/`.
+- **Trimmed on 2026-11-08** (in git history): picks/bans, Ranked vs Unranked, synergy, the
+  split-half control and the coverage simulation. Don't rebuild them unless the user asks.
 - **Data:** `match_player` (1 row per player per match), extracted by `winlock extract` for
   matches started 10-28 → 10-31 UTC (18 columns, ~11.4M rows) into `data/raw/patch_window/`.
-  Parameters and the named time windows in `config/analysis.toml`.
+  `winlock extract --window weekend_placebo` reads 10-22 → 10-24 into
+  `data/raw/weekend_placebo/`. Parameters and the named time windows in `config/analysis.toml`.
 
 ### Structure
 
 | Path | Role |
 |---|---|
 | `src/winlock/config.py` | reads `config/analysis.toml` |
-| `src/winlock/db.py` | DuckDB connection and parquet reading |
+| `src/winlock/db.py` | DuckDB connection and parquet reading (any extract; the main one by default) |
 | `src/winlock/extract.py` | `winlock extract`: reads a time window from the public data dumps over HTTPS (manifest → files → projected read → dedup) |
 | `src/winlock/population.py` | filters that define the population; named windows (`[windows]`) |
 | `src/winlock/quality.py` | data checks (start days/hours, 12 rows/match); `winlock quality` |
 | `src/winlock/stats.py` | Wilson, binomial test, z-score, Holm/BH, prediction metrics |
-| `src/winlock/evaluation.py` | compare two samples of hero rates (before/after the update, placebo) |
-| `src/winlock/model.py` | logistic regression (heroes → winner): fit on train, tested before/after the update, retrain check |
+| `src/winlock/evaluation.py` | compare two samples of hero rates (before/after the update, placebos); compare two extracts |
+| `src/winlock/model.py` | logistic regression (heroes → winner): fit on train, tested before/after the update, retrain check, bootstrap of the weights |
 | `src/winlock/figures.py` | charts for the post |
 | `src/winlock/theme.py` | chart themes (`deadlock` / `clean`): palette, fonts, art-deco frame |
 | `src/winlock/portraits.py` | hero portraits: `winlock portraits` caches them in `data/reference/portraits/` |
-| `src/winlock/cli.py`, `__main__.py` | entry point: `winlock extract / quality / figures / patch / model / portraits`; loads, calls, prints, saves (no analysis logic) |
+| `src/winlock/cli.py`, `__main__.py` | entry point: `winlock extract / quality / figures / patch / model / robustness / portraits`; loads, calls, prints, saves (no analysis logic) |
 | `notebooks/` | charts only; the user writes the text. No logic of its own |
 | `tests/` | one test file per module, plus chart smoke tests (fake matches in `conftest.py`) |
 | `reports/figures`, `reports/tables` | final outputs |
@@ -104,8 +107,8 @@ Use it to review the user's work and call out anything missing:
 
 ## Scope and pace
 
-- Week 1 first: base chart with Wilson + post. If the user pulls toward the extension or week 2
-  before that, gently remind them of the priority (the decision is theirs).
+- The article and the post first. If the user pulls toward new analyses before publishing,
+  gently remind them of the priority (the decision is theirs).
 - Pitfalls from the plan: wanting to download everything, doing everything in the notebook,
   perfectionism, forgetting to record the period/patch in the README.
 - 1–2 h sessions: at the end of a step, suggest the next concrete step and what to write down

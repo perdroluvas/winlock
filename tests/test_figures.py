@@ -85,3 +85,26 @@ def test_patch_dip_chart(tmp_path):
             buffer=(bins[3], bins[5]),
         )
     )
+
+
+def test_before_after_chart_rings_newly_bannable(ev, tmp_path):
+    changes = ev.rename(columns={"rate_train": "rate_before", "rate_test": "rate_after"})
+    changes["newly_bannable"] = [True, False, False]
+    check(figures.before_after_chart(changes, tmp_path / "a.png", "t"))
+
+
+def test_movers_chart_is_a_4_by_5_card(heroes, tmp_path):
+    after = heroes.assign(wins=heroes["wins"] + [80, -150, 0])
+    after = add_wilson(after[["hero_id", "games", "wins"]])
+    from winlock.evaluation import compare_samples
+
+    changes = compare_samples(heroes, after, ("before", "after"))
+    path = figures.movers_chart(changes, tmp_path / "m.png", "t", subtitle="s", n=2, dpi=100)
+    check(path)
+    if theme.active().trim:  # the framed theme keeps the exact figure size
+        assert Image.open(path).size == (720, 900)
+
+
+def test_coefficients_chart_with_intervals(ev, tmp_path):
+    coef = ev.assign(coef=[0.1, -0.2, 0.0], ci_low=[0.05, -0.3, -0.1], ci_high=[0.15, -0.1, 0.1])
+    check(figures.coefficients_chart(coef, tmp_path / "c.png", "t", n_outliers=1))

@@ -4,9 +4,10 @@ import pandas as pd
 from winlock.config import load_config, resolve_path
 
 
-def connect() -> duckdb.DuckDBPyConnection:
+def connect(match_player: str | None = None) -> duckdb.DuckDBPyConnection:
+    """Open one extract as the `match_player` view (default: the main one in [data])."""
     cfg = load_config()
-    path = resolve_path(cfg["data"]["match_player"])
+    path = resolve_path(match_player or cfg["data"]["match_player"])
     con = duckdb.connect()
     # Days and hours are defined in UTC, not in the machine's local time zone.
     con.execute("SET TimeZone = 'UTC'")

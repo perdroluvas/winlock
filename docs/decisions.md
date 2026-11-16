@@ -4,6 +4,46 @@ One entry per decision. Format: context → decision → consequence. Newest fir
 
 ---
 
+## 2026-11-15: Robustness checks before publishing; uncertainty on the weights
+
+**Context.** Before the article, four gaps were open:
+- the placebo didn't cover a weekend, and the post side is Friday → Saturday;
+- the late-arrival re-extraction planned on 2026-11-08 hadn't been run;
+- the "McGinnis is better than her win rate says" claim had no uncertainty;
+- the limitations didn't mention that the update made the newest heroes bannable.
+
+**Decision.** (user asked for all four)
+- **Weekend placebo.** The patch comparison's weekdays, hours and buffer, one week earlier:
+  Thu 10-22 20:30 → Fri 10-23 20:30 vs Fri 10-23 21:30 → Sat 10-24 21:30. The windows were
+  written to `[robustness.weekend]` before the comparison ran. It needs its own extract
+  (`winlock extract --window weekend_placebo`, run 2026-11-16 02:06 UTC).
+- **Late arrivals.** The patch window extracted again (run 2026-11-16 02:09 UTC) and the patch
+  comparison repeated on it. **The main numbers stay on the 2026-11-08 extract**, as decided
+  then; the new extract is only a check.
+- **Weights.** 500 bootstrap refits on train matches drawn with replacement, at the chosen C,
+  give a 95% percentile interval per weight. This reverses the 2026-11-08 "no uncertainty
+  bands on the weights". The unit drawn is the whole match.
+- **Bans.** Checked in `banned_hero_ids`: the 6 newest heroes by release date are banned in 0%
+  of matches before the update and 1.1–9.1% after. Recorded as a limitation, not analysed.
+- **Charts:** the before/after scatter rings the 6 newly bannable heroes; a new 4:5 card
+  (`patch_movers.png`) shows the 10 largest changes for social posts.
+- **Repo:** MIT license for the code, a CI workflow (lint + tests), a Valve disclaimer.
+
+**Consequence.**
+- Weekend placebo: 0 of 44 heroes change after Holm, SD of z 0.95, largest change 0.8 pp. An
+  ordinary Friday → Saturday doesn't explain the update's changes. It is one weekend, and
+  whether a smaller update shipped inside it wasn't checked.
+- Late arrivals: 9–10% more matches per window. The largest shift in any hero's win rate is
+  0.15 pp, in any before/after change 0.24 pp. 21 of 44 heroes change after Holm, including
+  all of the original 20. The model wasn't refit on the new extract.
+- Weights: they sum to zero (every match has six +1 and six −1, and L2 picks the smallest
+  weights), so a weight's sign is relative to the average hero, whose win rate is 49.3%.
+  McGinnis: 48.3% win rate, weight +0.108 (95% interval +0.089 to +0.129). Billy (+0.040) and
+  Lash (−0.026) also sit on the other side of average than their win rates. The 44 intervals
+  aren't corrected for multiple comparisons.
+
+---
+
 ## 2026-11-08: The article focuses on the logistic regression
 
 **Context.** The rebuild produced many analyses: win rates, patch, placebo, picks/bans, Ranked vs

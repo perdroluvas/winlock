@@ -26,11 +26,10 @@ seed = 42
 dir = "reports/figures"
 tables_dir = "reports/tables"
 dpi = 150
-# "deadlock" (dark, game colors, art-deco frame) or "clean" (light, one accent).
 theme = "deadlock"
+movers = 10
 
 [portraits]
-# Hero portraits for the win-rate chart, cached once by `winlock portraits` (art: Valve).
 api_url = "https://api.deadlock-api.com/v1/assets/heroes"
 image_key = "icon_image_small"
 dir = "data/reference/portraits"
@@ -43,12 +42,17 @@ validation_fraction = 0.2
 # both the old (pre-update) and the refit model on the same matches.
 post_fit_fraction = 0.7
 C_grid = [0.001, 0.01, 0.1, 1.0, 10.0]
+# Uncertainty of the weights: refits on train matches drawn with replacement.
+bootstrap_refits = 500
 
 [patch]
 # "Halloween 2026 + Gameplay Update" (Steam announcement). 35 heroes, ~50 items, mid-boss,
 # comeback mechanics; the 6 newest heroes became bannable; Halloween event until 2026-11-02.
 title = "Halloween 2026 + Gameplay Update"
 published_at = "2026-10-30T20:51:49Z"
+# The newest heroes by release date, bannable only from the update on. Verified in
+# banned_hero_ids: 0% of matches ban them before, 1-9% after.
+newly_bannable = 6
 # Quality chart of match starts around the update (the dip), and the buffer it motivates.
 dip_window = ["2026-10-30T17:00:00Z", "2026-10-31T01:00:00Z"]
 dip_bin_minutes = 10
@@ -72,6 +76,13 @@ columns = [
     "not_scored", "low_pri_pool", "new_player_pool", "banned_hero_ids",
 ]
 
+# `winlock extract --window weekend_placebo`: the same weekdays and hours as the patch
+# comparison, one week earlier (Thu 10-22 .. Sat 10-24), with no update in between.
+[extract.extra.weekend_placebo]
+window_start = "2026-10-22T00:00:00Z"
+window_end = "2026-10-25T00:00:00Z"
+out_dir = "data/raw/weekend_placebo"
+
 [windows]
 # Fixed 2026-11-08, BEFORE any post-patch rate was computed (docs/decisions.md). [start, end)
 # in UTC, on start_time. Starts 10-30 20:30-21:30 (the update at 20:51:49 and the dip in match
@@ -87,3 +98,15 @@ post = ["2026-10-30T21:30:00Z", "2026-10-31T21:30:00Z"]         # first 24 h of 
 # update, so every "change" it finds is noise: the baseline for reading the patch result.
 patch = { before = "pre", after = "post" }
 placebo = { before = "placebo_pre", after = "pre" }
+
+# `winlock robustness`: the same method on other extracts. Neither feeds the main numbers.
+[robustness.weekend]
+# Weekend placebo, fixed 2026-11-15 before looking at it: the patch comparison's weekdays,
+# hours and buffer, one week earlier. Thu 20:30 -> Fri 20:30 vs Fri 21:30 -> Sat 21:30.
+match_player = "data/raw/weekend_placebo/20261116T0206Z/match_player.parquet"
+before = ["2026-10-22T20:30:00Z", "2026-10-23T20:30:00Z"]
+after = ["2026-10-23T21:30:00Z", "2026-10-24T21:30:00Z"]
+
+[robustness.late_arrivals]
+# The patch window re-extracted 8 days later: do the matches that arrived late change the result?
+match_player = "data/raw/patch_window/20261116T0209Z/match_player.parquet"

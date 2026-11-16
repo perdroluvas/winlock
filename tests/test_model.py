@@ -95,3 +95,23 @@ def test_retrain_check_scores_both_models_on_the_same_late_matches():
     assert check["n_fit"] == 1400 and check["n_eval"] == 600
     assert check["metrics"]["n"].tolist() == [600, 600]
     assert check["loss_diff"]["mean_diff"] < 0  # the refit model learned the flipped game
+
+
+def test_bootstrap_coefficients_cover_the_true_sign():
+    from winlock.model import bootstrap_coefficients, coefficient_intervals
+
+    rng = np.random.default_rng(0)
+    # 4 heroes, 1 vs 1: hero 0 is strong, hero 3 weak, heroes 1 and 2 equal.
+    true_w = np.array([1.0, 0.0, 0.0, -1.0])
+    X = np.zeros((4000, 4))
+    for i in range(len(X)):
+        a, b = rng.choice(4, size=2, replace=False)
+        X[i, a], X[i, b] = 1, -1
+    y = (rng.uniform(size=len(X)) < 1 / (1 + np.exp(-X @ true_w))).astype(float)
+    boot = bootstrap_coefficients(X, y, C=1.0, n_refits=40, seed=1)
+    assert boot.shape == (40, 4)
+    low, high = coefficient_intervals(boot, alpha=0.05)
+    assert low[0] > 0 and high[3] < 0  # clearly strong and clearly weak
+    assert (low < high).all()
+    again = bootstrap_coefficients(X, y, C=1.0, n_refits=40, seed=1)
+    assert np.array_equal(boot, again)  # same seed, same draws
