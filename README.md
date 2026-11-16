@@ -1,5 +1,7 @@
 # winlock
 
+###### I'm perdro and I'm using LLMs to help me make this project of data analysis on Deadlock(a game that I love :D), this is a way for me to learn how to use these agents to their full capacity and learn something along the way. The main inspiration was from the courses of Statistics and AI at my uni so I intend to keep doing these AI-driver projects. Though the requirement for it to be complete is for me to rewrite the core by hand without looking it up. As of now it is NOT completed, although the data IS valid.
+
 [![CI](https://github.com/perdroluvas/winlock/actions/workflows/ci.yml/badge.svg)](https://github.com/perdroluvas/winlock/actions/workflows/ci.yml)
 
 **Is a Deadlock hero's win rate reliable, or is it statistical noise? And what does a game
