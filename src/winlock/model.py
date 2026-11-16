@@ -16,59 +16,45 @@ SIDE_ONLY = "No heroes (side only)"
 
 
 def match_table(con: duckdb.DuckDBPyConnection, win: Window) -> pd.DataFrame:
-    return con.execute(
-        f"""
-        SELECT match_id,
-               MIN(start_time) AS start_time,
-               LIST(hero_id) FILTER (WHERE team = 'Team0') AS team0_heroes,
-               LIST(hero_id) FILTER (WHERE team = 'Team1') AS team1_heroes,
-               BOOL_OR(won AND team = 'Team0') AS team0_won
-        FROM population
-        WHERE {in_window(win)}
-        GROUP BY match_id
-        ORDER BY start_time, match_id
-        """
-    ).df()
+    """One row per population match in the window, ordered by start_time then match_id.
+
+    Columns: match_id, start_time, team0_heroes and team1_heroes (lists of hero_id),
+    team0_won.
+    """
+    raise NotImplementedError
 
 
 def hero_matrix(matches: pd.DataFrame, hero_ids: list[int]) -> np.ndarray:
-    """+1 for each hero on Team0, −1 for each hero on Team1, 0 if absent."""
-    col = {h: j for j, h in enumerate(hero_ids)}
-    X = np.zeros((len(matches), len(hero_ids)))
-    for i, (team0, team1) in enumerate(
-        zip(matches["team0_heroes"], matches["team1_heroes"], strict=True)
-    ):
-        for h in team0:
-            X[i, col[h]] += 1
-        for h in team1:
-            X[i, col[h]] -= 1
-    return X
+    """+1 for each hero on Team0, −1 for each hero on Team1, 0 if absent.
+
+    One row per match, one column per entry of hero_ids, in that order.
+    """
+    raise NotImplementedError
 
 
 def temporal_holdout(matches: pd.DataFrame, fraction: float) -> tuple[np.ndarray, np.ndarray]:
-    is_val = np.arange(len(matches)) >= round(len(matches) * (1 - fraction))
-    return ~is_val, is_val
+    """Boolean masks (fit, val) over matches already in time order.
+
+    val is the last `fraction` of the rows; fit is everything before it.
+    """
+    raise NotImplementedError
 
 
 def winrate_model(X: np.ndarray, hero_rates: np.ndarray) -> np.ndarray:
     """P(Team0 wins) from train win rates alone, no fitting: σ(Σ logit(rate) Team0 − Team1)."""
-    return expit(X @ logit(hero_rates))
+    raise NotImplementedError
 
 
 def fit_logistic(
     X, y: np.ndarray, fit: np.ndarray, val: np.ndarray, cfg: dict[str, Any]
 ) -> tuple[LogisticRegression, pd.DataFrame]:
-    """Choose C on the validation slice (later in time), then refit on all of train."""
-    seed = cfg["stats"]["seed"]
-    fit, val = np.flatnonzero(fit), np.flatnonzero(val)
-    scores = []
-    for C in cfg["model"]["C_grid"]:
-        m = LogisticRegression(C=C, max_iter=1000, random_state=seed).fit(X[fit], y[fit])
-        scores.append({"C": C, "val_log_loss": log_loss(y[val], m.predict_proba(X[val])[:, 1])})
-    scores = pd.DataFrame(scores)
-    best_C = scores.loc[scores["val_log_loss"].idxmin(), "C"]
-    final = LogisticRegression(C=best_C, max_iter=1000, random_state=seed).fit(X, y)
-    return final, scores
+    """Choose C on the validation slice (later in time), then refit on all of train.
+
+    fit and val are boolean masks. For each C in cfg["model"]["C_grid"], fit on the fit
+    rows and score log loss on the val rows. Returns (model refit on every row at the best
+    C, DataFrame with columns C and val_log_loss).
+    """
+    raise NotImplementedError
 
 
 @dataclass
@@ -85,72 +71,52 @@ class MatchData:
 def load_match_data(
     con: duckdb.DuckDBPyConnection, hero_ids: list[int], fit_window: Window, test_window: Window
 ) -> MatchData:
-    return match_data(hero_ids, match_table(con, fit_window), match_table(con, test_window))
+    """MatchData for a fit window and a test window, read from the population table."""
+    raise NotImplementedError
 
 
 def match_data(hero_ids: list[int], train: pd.DataFrame, test: pd.DataFrame) -> MatchData:
-    return MatchData(
-        hero_ids=hero_ids,
-        train=train,
-        test=test,
-        X_train=hero_matrix(train, hero_ids),
-        X_test=hero_matrix(test, hero_ids),
-        y_train=train["team0_won"].to_numpy(dtype=float),
-        y_test=test["team0_won"].to_numpy(dtype=float),
-    )
+    """Bundle two match tables with their hero matrices and outcomes (team0_won as floats)."""
+    raise NotImplementedError
 
 
 def rate_vector(train_rates: pd.Series, hero_ids: list[int]) -> np.ndarray:
-    return train_rates.reindex(hero_ids).fillna(0.5).to_numpy()
+    """Win rates aligned to hero_ids, as an array; a hero with no rate gets 0.5."""
+    raise NotImplementedError
 
 
 def fit_baselines(
     data: MatchData, rates: np.ndarray, cfg: dict[str, Any]
 ) -> tuple[dict[str, np.ndarray], LogisticRegression, pd.DataFrame]:
-    fit, val = temporal_holdout(data.train, cfg["model"]["validation_fraction"])
-    logreg, val_scores = fit_logistic(data.X_train, data.y_train, fit, val, cfg)
-    preds = predict_baselines(data.X_test, data.y_train.mean(), rates, logreg)
-    return preds, logreg, val_scores
+    """Fit the logistic regression on train and predict the test matches with all three models.
+
+    Returns (predictions as in predict_baselines, the fitted model, the validation scores).
+    """
+    raise NotImplementedError
 
 
 def predict_baselines(
     X_test: np.ndarray, team0_share: float, rates: np.ndarray, logreg: LogisticRegression
 ) -> dict[str, np.ndarray]:
-    return {
-        SIDE_ONLY: np.full(len(X_test), team0_share),
-        "Win-rate model": winrate_model(X_test, rates),
-        "Logistic regression": logreg.predict_proba(X_test)[:, 1],
-    }
+    """P(Team0 wins) for each test match, per model.
+
+    Keys: SIDE_ONLY (the train Team0 win share for every match), "Win-rate model" and
+    "Logistic regression".
+    """
+    raise NotImplementedError
 
 
 def retrain_check(
     post: MatchData, old_model: LogisticRegression, cfg: dict[str, Any]
 ) -> dict[str, Any]:
-    """Refit on early post-update matches; score old and new model on the same later ones."""
-    alpha = cfg["stats"]["alpha"]
-    n_fit = round(len(post.test) * cfg["model"]["post_fit_fraction"])
-    fit_rows, eval_rows = np.arange(n_fit), np.arange(n_fit, len(post.test))
-    X_fit, y_fit = post.X_test[fit_rows], post.y_test[fit_rows]
-    X_eval, y_eval = post.X_test[eval_rows], post.y_test[eval_rows]
-    fit, val = temporal_holdout(post.test.iloc[fit_rows], cfg["model"]["validation_fraction"])
-    new_model, val_scores = fit_logistic(X_fit, y_fit, fit, val, cfg)
-    p_old = old_model.predict_proba(X_eval)[:, 1]
-    p_new = new_model.predict_proba(X_eval)[:, 1]
-    metrics = pd.DataFrame(
-        [
-            {"model": "Trained before the update", **evaluate_predictions(y_eval, p_old, alpha)},
-            {"model": "Retrained after the update", **evaluate_predictions(y_eval, p_new, alpha)},
-        ]
-    )
-    return {
-        "metrics": metrics,
-        "loss_diff": paired_loss_difference(y_eval, p_old, p_new, alpha),
-        "val_scores": val_scores,
-        "model": new_model,
-        "n_fit": n_fit,
-        "n_eval": len(eval_rows),
-        "eval_start": post.test["start_time"].iloc[n_fit],
-    }
+    """Refit on early post-update matches; score old and new model on the same later ones.
+
+    The first cfg["model"]["post_fit_fraction"] of post.test (in time) refits the model, C
+    chosen as in fit_logistic; the rest scores both models. Returns a dict with metrics (one
+    row per model: "Trained before the update", "Retrained after the update"), loss_diff
+    (paired, new − old), val_scores, model, n_fit, n_eval and eval_start.
+    """
+    raise NotImplementedError
 
 
 def bootstrap_coefficients(
@@ -161,15 +127,12 @@ def bootstrap_coefficients(
     The unit drawn is the whole match, so the spread of a weight across refits shows how
     much it depends on which matches happened to be in train.
     """
-    rng = np.random.default_rng(seed)
-    out = np.empty((n_refits, X.shape[1]))
-    for b in range(n_refits):
-        rows = rng.integers(0, len(y), len(y))
-        out[b] = LogisticRegression(C=C, max_iter=1000).fit(X[rows], y[rows]).coef_[0]
-    return out
+    raise NotImplementedError
 
 
 def coefficient_intervals(boot: np.ndarray, alpha: float) -> tuple[np.ndarray, np.ndarray]:
-    """Percentile interval per weight: the middle 1 − alpha of the refits."""
-    low, high = np.percentile(boot, [100 * alpha / 2, 100 * (1 - alpha / 2)], axis=0)
-    return low, high
+    """Percentile interval per weight: the middle 1 − alpha of the refits.
+
+    boot has one row per refit. Returns (low, high), one value per weight.
+    """
+    raise NotImplementedError

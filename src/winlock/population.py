@@ -22,102 +22,60 @@ Window = tuple[str, str]
 
 
 def window(cfg: dict[str, Any], name: str) -> Window:
-    start, end = cfg["windows"][name]
-    return start, end
+    """(start, end) of a named window in cfg["windows"]."""
+    raise NotImplementedError
 
 
 def population_span(cfg: dict[str, Any]) -> Window:
-    starts, ends = zip(*cfg["windows"].values(), strict=True)
-    return min(starts), max(ends)
+    """(earliest start, latest end) over all named windows."""
+    raise NotImplementedError
 
 
 def _filter_params(cfg: dict[str, Any]) -> dict[str, Any]:
-    pop = cfg["population"]
-    start, end = population_span(cfg)
-    return {"start": start, "end": end, **{key: pop[key] for key, _ in ROW_FILTERS[1:]}}
+    """Query parameters for ROW_FILTERS: start and end (the population span) plus one
+    entry per population filter (game_mode, match_mode, match_outcome).
+    """
+    raise NotImplementedError
 
 
 def create_population(con: duckdb.DuckDBPyConnection, cfg: dict[str, Any]) -> None:
-    """Complete matches only (12 rows, 6 winners), dropped whole otherwise."""
-    pop = cfg["population"]
-    where = " AND ".join(cond for _, cond in ROW_FILTERS)
-    flags = "".join(f" AND NOT {flag}" for flag in pop.get("exclude_flags", []))
-    cols = ", ".join(f"f.{c}" for c in POPULATION_COLUMNS)
-    con.execute(
-        f"""
-        CREATE OR REPLACE TABLE population AS
-        WITH filtered AS (
-            SELECT * FROM match_player WHERE {where}{flags}
-        ),
-        complete AS (
-            SELECT match_id FROM filtered
-            GROUP BY match_id
-            HAVING COUNT(*) = $players AND SUM(CAST(won AS INT)) = $wins
-        )
-        SELECT {cols} FROM filtered f JOIN complete USING (match_id)
-        """,
-        {**_filter_params(cfg), "players": pop["players_per_match"], "wins": pop["wins_per_match"]},
-    )
+    """Complete matches only (12 rows, 6 winners), dropped whole otherwise.
+
+    Creates the table `population` (POPULATION_COLUMNS) from the view `match_player`: rows
+    that pass ROW_FILTERS and carry none of cfg["population"]["exclude_flags"], in matches
+    left with exactly players_per_match rows and wins_per_match winners.
+    """
+    raise NotImplementedError
 
 
 def population_report(con: duckdb.DuckDBPyConnection, cfg: dict[str, Any]) -> pd.DataFrame:
-    steps = [("file", "SELECT COUNT(*), COUNT(DISTINCT match_id) FROM match_player", {})]
-    params = _filter_params(cfg)
-    names = {"window": ["start", "end"]}
-    conds: list[str] = []
-    used: dict[str, Any] = {}
-    for key, cond in ROW_FILTERS:
-        conds.append(cond)
-        used |= {k: params[k] for k in names.get(key, [key])}
-        query = (
-            "SELECT COUNT(*), COUNT(DISTINCT match_id) FROM match_player "
-            f"WHERE {' AND '.join(conds)}"
-        )
-        steps.append((key, query, dict(used)))
-    steps.append(
-        ("complete_match", "SELECT COUNT(*), COUNT(DISTINCT match_id) FROM population", {})
-    )
+    """How many rows and matches survive each filter, cumulatively.
 
-    rows = []
-    for step, query, step_params in steps:
-        [(n_rows, n_matches)] = con.execute(query, step_params).fetchall()
-        rows.append({"step": step, "rows": n_rows, "matches": n_matches})
-    report = pd.DataFrame(rows)
-    report["pct_matches_kept"] = (100 * report["matches"] / report["matches"].shift()).round(1)
-    return report
+    One row per step: `file`, then each ROW_FILTERS key in order, then `complete_match`.
+    Columns: step, rows, matches, pct_matches_kept (vs the previous step, 1 decimal).
+    """
+    raise NotImplementedError
 
 
 def in_window(win: Window) -> str:
-    start, end = win
-    return f"start_time >= TIMESTAMPTZ '{start}' AND start_time < TIMESTAMPTZ '{end}'"
+    """SQL condition: start_time inside [start, end)."""
+    raise NotImplementedError
 
 
 def window_sizes(con: duckdb.DuckDBPyConnection, cfg: dict[str, Any]) -> pd.DataFrame:
-    rows = []
-    for name in cfg["windows"]:
-        [(n, first, last)] = con.execute(
-            "SELECT COUNT(DISTINCT match_id), strftime(MIN(start_time), '%m-%d %H:%M'), "
-            "strftime(MAX(start_time), '%m-%d %H:%M') FROM population "
-            f"WHERE {in_window(window(cfg, name))}"
-        ).fetchall()
-        rows.append({"window": name, "matches": n, "first_start": first, "last_start": last})
-    return pd.DataFrame(rows)
+    """Per named window: window, matches, first_start, last_start (as '%m-%d %H:%M')."""
+    raise NotImplementedError
 
 
 def hero_winrates(con: duckdb.DuckDBPyConnection, win: Window) -> pd.DataFrame:
-    return con.execute(
-        f"""
-        SELECT hero_id, COUNT(*) AS games, SUM(CAST(won AS INT)) AS wins
-        FROM population
-        WHERE {in_window(win)}
-        GROUP BY hero_id
-        ORDER BY hero_id
-        """
-    ).df()
+    """hero_id, games and wins per hero for population rows in the window, by hero_id."""
+    raise NotImplementedError
 
 
 def add_hero_names(df: pd.DataFrame, heroes: pd.DataFrame) -> pd.DataFrame:
-    out = df.merge(heroes[["hero_id", "name", "release_date"]], on="hero_id", how="left")
-    out["name"] = out["name"].fillna("hero " + out["hero_id"].astype(str))
-    first = ["hero_id", "name", "release_date"]
-    return out[first + [c for c in out.columns if c not in first]]
+    """Add name and release_date from `heroes` (left join on hero_id).
+
+    A hero missing from `heroes` is named "hero <id>". hero_id, name and release_date
+    come first, the other columns keep their order.
+    """
+    raise NotImplementedError
